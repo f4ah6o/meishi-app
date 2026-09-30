@@ -17,7 +17,7 @@ function makeConfig(): AppConfig {
 /** fetch stub that records every request URL and replies canned records. */
 function fakeFetch(respond: (url: URL) => KintoneRecord[]) {
   const urls: URL[] = [];
-  const impl = (async (input: RequestInfo | URL) => {
+  const impl = (async (input: URL | string) => {
     const url = new URL(String(input));
     urls.push(url);
     return new Response(JSON.stringify({ records: respond(url) }), { status: 200 });
