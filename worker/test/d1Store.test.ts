@@ -128,6 +128,85 @@ describe("D1Store corporations", () => {
     expect(found?.verification_status).toBe("verified");
   });
 
+  it("does not overwrite a number claimed by a concurrent verified confirm", async () => {
+    const corp = await store.getOrCreateCorporation({
+      officialName: "株式会社斎藤食品",
+      verificationStatus: "unverified",
+    });
+    // Concurrent winner: another request already numbered the same row.
+    await db
+      .prepare(
+        "UPDATE corporations SET corporate_number = ?, verification_status = 'verified' WHERE corporation_id = ?",
+      )
+      .bind("4444444444444", corp.corporationId)
+      .run();
+    // This request still holds the stale unnumbered view it read earlier.
+    const raceable = store as unknown as {
+      sameNameCorporations: (n: string) => Promise<unknown[]>;
+    };
+    const original = raceable.sameNameCorporations;
+    raceable.sameNameCorporations = async () => [
+      {
+        corporation_id: corp.corporationId,
+        corporate_number: "",
+        official_name: "株式会社斎藤食品",
+        name_key: "",
+        address: "",
+        website: "",
+        verification_status: "unverified",
+      },
+    ];
+    const loser = await store.getOrCreateCorporation({
+      officialName: "株式会社斎藤食品",
+      corporateNumber: "5555555555555",
+      verificationStatus: "verified",
+    });
+    raceable.sameNameCorporations = original;
+    // Different registered numbers are distinct entities — a new row, not an alias.
+    expect(loser.deduplicated).toBe(false);
+    expect(loser.corporationId).not.toBe(corp.corporationId);
+    const winner = await store.findCorporationByNumber("4444444444444");
+    expect(winner?.corporate_number).toBe("4444444444444");
+    const created = await store.findCorporationByNumber("5555555555555");
+    expect(created?.official_name).toBe("株式会社斎藤食品");
+  });
+
+  it("dedupes when the concurrent winner registered the same number", async () => {
+    const corp = await store.getOrCreateCorporation({
+      officialName: "株式会社加藤電機",
+      verificationStatus: "unverified",
+    });
+    await db
+      .prepare(
+        "UPDATE corporations SET corporate_number = ?, verification_status = 'verified' WHERE corporation_id = ?",
+      )
+      .bind("6666666666666", corp.corporationId)
+      .run();
+    const raceable = store as unknown as {
+      sameNameCorporations: (n: string) => Promise<unknown[]>;
+    };
+    const original = raceable.sameNameCorporations;
+    raceable.sameNameCorporations = async () => [
+      {
+        corporation_id: corp.corporationId,
+        corporate_number: "",
+        official_name: "株式会社加藤電機",
+        name_key: "",
+        address: "",
+        website: "",
+        verification_status: "unverified",
+      },
+    ];
+    const loser = await store.getOrCreateCorporation({
+      officialName: "株式会社加藤電機",
+      corporateNumber: "6666666666666",
+      verificationStatus: "verified",
+    });
+    raceable.sameNameCorporations = original;
+    expect(loser.deduplicated).toBe(true);
+    expect(loser.corporationId).toBe(corp.corporationId);
+  });
+
   it("searches corporations by name key substring", async () => {
     const results = await store.searchCorporationsByName("山田建設");
     expect(results.length).toBeGreaterThanOrEqual(1);

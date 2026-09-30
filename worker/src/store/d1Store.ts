@@ -227,13 +227,18 @@ export class D1Store implements DataStore {
       // Only a verified number lets us upgrade an unnumbered same-name record;
       // an unverifiable number must not be silently attached to it.
       if (!conflict && unnumbered && data.verificationStatus === "verified") {
-        await this.db
+        // Compare-and-set: the row is only claimable while still unnumbered.
+        // Two verified confirms carrying *different* numbers may have read the
+        // same unnumbered row; without this guard the second write would
+        // overwrite the first number and both would report the same id,
+        // aliasing distinct legal entities.
+        const claimed = await this.db
           .prepare(
             `UPDATE corporations
              SET corporate_number = ?, verification_status = 'verified',
                  address = CASE WHEN address = '' THEN ? ELSE address END,
                  website = CASE WHEN website = '' THEN ? ELSE website END
-             WHERE corporation_id = ?`,
+             WHERE corporation_id = ? AND corporate_number = ''`,
           )
           .bind(
             data.corporateNumber,
@@ -242,7 +247,24 @@ export class D1Store implements DataStore {
             unnumbered.corporation_id,
           )
           .run();
-        return { corporationId: unnumbered.corporation_id, deduplicated: true };
+        if (claimed.meta.changes === 1) {
+          return { corporationId: unnumbered.corporation_id, deduplicated: true };
+        }
+        // Lost the race — re-read whoever claimed the row.
+        const winner = await this.db
+          .prepare(
+            `SELECT corporation_id, corporate_number, official_name, name_key,
+                    address, website, verification_status
+             FROM corporations WHERE corporation_id = ?`,
+          )
+          .bind(unnumbered.corporation_id)
+          .first<CorporationRow>();
+        if (winner && winner.corporate_number === data.corporateNumber) {
+          return { corporationId: winner.corporation_id, deduplicated: true };
+        }
+        // A different number claimed the row: it is a distinct legal entity,
+        // so fall through to the INSERT (the corporate_number unique index
+        // dedupes if this number is already registered elsewhere).
       }
     }
 
