@@ -44,7 +44,13 @@ describe("OpenCodeVisionExtractor", () => {
       auth: string;
       session: string;
       ua: string;
-      body: any;
+      body: {
+        model: string;
+        max_tokens: number;
+        messages: {
+          content: { type: string; text?: string; image_url?: { url: string } }[];
+        }[];
+      };
     };
     const ex = extractorWith(async (url, init) => {
       const headers = init.headers as Record<string, string>;
@@ -64,10 +70,10 @@ describe("OpenCodeVisionExtractor", () => {
     expect(seen.ua).toContain("meishi-app");
     expect(seen.body.model).toBe("deepseek-v4-flash-vision-exp");
     expect(seen.body.max_tokens).toBeGreaterThanOrEqual(1500);
-    const parts = seen.body.messages[0].content;
-    expect(parts[0].type).toBe("text");
-    expect(parts[1].type).toBe("image_url");
-    expect(parts[1].image_url.url).toMatch(/^data:image\/jpeg;base64,/);
+    const parts = seen.body.messages[0]?.content ?? [];
+    expect(parts[0]?.type).toBe("text");
+    expect(parts[1]?.type).toBe("image_url");
+    expect(parts[1]?.image_url?.url).toMatch(/^data:image\/jpeg;base64,/);
   });
 
   it("parses fenced JSON output", async () => {

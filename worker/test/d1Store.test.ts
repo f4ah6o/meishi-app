@@ -84,6 +84,33 @@ describe("D1Store corporations", () => {
     expect(second.corporationId).toBe(first.corporationId);
   });
 
+  it("dedupes unnumbered same-name rows when the INSERT races the index", async () => {
+    const first = await store.getOrCreateCorporation({
+      officialName: "株式会社中村商会",
+      verificationStatus: "unverified",
+    });
+    expect(first.deduplicated).toBe(false);
+    // Simulate the race: this request's read missed the row a concurrent
+    // confirmation already committed, so its INSERT hits the unique index.
+    const raceable = store as unknown as {
+      sameNameCorporations: () => Promise<unknown[]>;
+    };
+    const original = raceable.sameNameCorporations;
+    raceable.sameNameCorporations = async () => [];
+    const second = await store.getOrCreateCorporation({
+      officialName: "株式会社中村商会",
+      verificationStatus: "unverified",
+    });
+    raceable.sameNameCorporations = original;
+    expect(second.deduplicated).toBe(true);
+    expect(second.corporationId).toBe(first.corporationId);
+    const count = await db
+      .prepare("SELECT COUNT(*) AS n FROM corporations WHERE official_name = ?")
+      .bind("株式会社中村商会")
+      .first<{ n: number }>();
+    expect(count?.n).toBe(1);
+  });
+
   it("upgrades an unnumbered same-name record when a verified number arrives", async () => {
     const first = await store.getOrCreateCorporation({
       officialName: "株式会社鈴木工務店",

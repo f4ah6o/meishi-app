@@ -16,6 +16,10 @@ CREATE TABLE corporations (
 );
 CREATE UNIQUE INDEX idx_corporations_number
   ON corporations(corporate_number) WHERE corporate_number <> '';
+-- Same-name rows with no corporate_number dedupe onto each other; the index
+-- makes that hold under concurrent registration, not just sequentially.
+CREATE UNIQUE INDEX idx_corporations_unnumbered_name_key
+  ON corporations(name_key) WHERE corporate_number = '' AND name_key <> '';
 CREATE INDEX idx_corporations_name_key ON corporations(name_key);
 
 CREATE TABLE contacts (

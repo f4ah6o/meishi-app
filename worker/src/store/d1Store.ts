@@ -267,15 +267,22 @@ export class D1Store implements DataStore {
         )
         .run();
     } catch (e) {
-      // A concurrent confirmation may have inserted the same
-      // corporate_number between our read and this INSERT: the partial
-      // unique index stops the duplicate row, and we dedupe onto the
-      // winner instead of failing with a 500.
-      if (data.corporateNumber && /unique|constraint/i.test(String(e))) {
-        const winner = await this.db
-          .prepare("SELECT corporation_id FROM corporations WHERE corporate_number = ?")
-          .bind(data.corporateNumber)
-          .first<{ corporation_id: string }>();
+      // A concurrent confirmation may have inserted the same identity
+      // (corporate_number, or name_key while still unnumbered) between our
+      // read and this INSERT: the partial unique indexes stop the duplicate
+      // row, and we dedupe onto the winner instead of failing with a 500.
+      if (/unique|constraint/i.test(String(e))) {
+        const winner = data.corporateNumber
+          ? await this.db
+              .prepare("SELECT corporation_id FROM corporations WHERE corporate_number = ?")
+              .bind(data.corporateNumber)
+              .first<{ corporation_id: string }>()
+          : await this.db
+              .prepare(
+                "SELECT corporation_id FROM corporations WHERE corporate_number = '' AND name_key = ?",
+              )
+              .bind(companyNameKey(data.officialName))
+              .first<{ corporation_id: string }>();
         if (winner) return { corporationId: winner.corporation_id, deduplicated: true };
       }
       throw e;
