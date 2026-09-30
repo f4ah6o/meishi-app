@@ -1,6 +1,10 @@
 import type { CorporationCandidate, NormalizedCard } from "@meishi/shared";
 import { describe, expect, it } from "vitest";
-import { nameSimilarity, RuleDecisionProvider } from "../src/decision/decision.ts";
+import {
+  JevDecisionProvider,
+  nameSimilarity,
+  RuleDecisionProvider,
+} from "../src/decision/decision.ts";
 import { normalizeCard } from "../src/normalize/normalize.ts";
 
 const card = (over: Partial<NormalizedCard> = {}): NormalizedCard =>
@@ -93,5 +97,56 @@ describe("RuleDecisionProvider", () => {
         corporateCandidates: [corp({ website: "yamada.co.jp" })],
       }),
     ).toBe(false);
+  });
+
+  it("never auto-confirms a choice that is not among the candidates", () => {
+    expect(
+      decider.isAutoConfirmable(
+        { choice: "9999999999999", confidence: 0.99 },
+        {
+          card: card(),
+          existingContacts: [],
+          corporateCandidates: [corp({ website: "yamada.co.jp" })],
+        },
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("JevDecisionProvider", () => {
+  const candidates = [corp({ website: "yamada.co.jp" })];
+  const jev = (choice: string) =>
+    new JevDecisionProvider(
+      "https://jev.example/decide",
+      "key",
+      new RuleDecisionProvider(),
+      async () => new Response(JSON.stringify({ choice, confidence: 0.99 }), { status: 200 }),
+    );
+
+  it("accepts a choice that names a presented candidate", async () => {
+    const decision = await jev("1234567890123").decide({
+      card: card(),
+      existingContacts: [],
+      corporateCandidates: candidates,
+    });
+    expect(decision.choice).toBe("1234567890123");
+  });
+
+  it("falls back to rules when Jev returns an out-of-candidate choice", async () => {
+    const decision = await jev("bogus-id").decide({
+      card: card(),
+      existingContacts: [],
+      corporateCandidates: candidates,
+    });
+    // The rule provider independently picks the only candidate.
+    expect(decision.choice).toBe("1234567890123");
+    const rule = new RuleDecisionProvider();
+    expect(
+      rule.isAutoConfirmable(decision, {
+        card: card(),
+        existingContacts: [],
+        corporateCandidates: candidates,
+      }),
+    ).toBe(false); // rule confidence, not the forged 0.99
   });
 });

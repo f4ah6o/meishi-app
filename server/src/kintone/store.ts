@@ -16,6 +16,14 @@ export interface DataStore {
     personId?: string;
     corporationId?: string;
   }): Promise<InteractionRecord[]>;
+  /** Read-only mirror of getOrCreateCorporation's dedupe: the id of the
+   *  existing record a call would reuse, or null when it would create one.
+   *  Used to validate references before any write happens. */
+  resolveCorporation(data: {
+    officialName: string;
+    corporateNumber?: string;
+    verificationStatus: string;
+  }): Promise<string | null>;
   getOrCreateCorporation(data: {
     officialName: string;
     corporateNumber?: string;

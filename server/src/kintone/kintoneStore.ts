@@ -130,6 +130,39 @@ export class KintoneStore implements DataStore {
     }));
   }
 
+  async resolveCorporation(data: {
+    officialName: string;
+    corporateNumber?: string;
+    verificationStatus: string;
+  }): Promise<string | null> {
+    if (data.corporateNumber) {
+      const existing = await this.client.getRecords(
+        this.apps.corporations.appId,
+        this.apps.corporations.token,
+        `corporate_number = "${q(data.corporateNumber)}" limit 1`,
+      );
+      if (existing[0]) return recordId(existing[0]);
+    }
+    const byName = await this.client.getRecords(
+      this.apps.corporations.appId,
+      this.apps.corporations.token,
+      `official_name = "${q(data.officialName)}" limit 10`,
+    );
+    if (!data.corporateNumber) {
+      const named = byName.find((r) => field(r, "corporate_number") === "");
+      return named ? recordId(named) : null;
+    }
+    const conflict = byName.some((r) => {
+      const n = field(r, "corporate_number");
+      return n !== "" && n !== data.corporateNumber;
+    });
+    const unnumbered = byName.find((r) => field(r, "corporate_number") === "");
+    if (!conflict && unnumbered && data.verificationStatus === "verified") {
+      return recordId(unnumbered);
+    }
+    return null;
+  }
+
   async getOrCreateCorporation(data: {
     officialName: string;
     corporateNumber?: string;

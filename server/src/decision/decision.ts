@@ -112,6 +112,11 @@ export class RuleDecisionProvider implements DecisionProvider {
   /** Whether the decision is safe to auto-confirm without human review. */
   isAutoConfirmable(result: DecisionResult, input: DecisionInput): boolean {
     if (result.choice === "none") return false;
+    // The choice must name one of the presented candidates — a decision
+    // pointing anywhere else can never be auto-confirmed.
+    if (!input.corporateCandidates.some((c) => c.corporate_number === result.choice)) {
+      return false;
+    }
     if (result.confidence < this.autoConfirmConfidence) return false;
     if (input.card.uncertain_fields.length > 0) return false;
     if (input.corporateCandidates.length > 1) return false;
@@ -162,7 +167,14 @@ export class JevDecisionProvider implements DecisionProvider {
       });
       if (!res.ok) throw new Error(`Jev endpoint ${res.status}`);
       const body = (await res.json()) as { choice?: string; confidence?: number };
-      if (typeof body.choice === "string" && typeof body.confidence === "number") {
+      // Only "none" or one of the presented corporate numbers is a valid
+      // answer — a typo or unknown id falls back to deterministic rules.
+      const valid = new Set(["none", ...input.corporateCandidates.map((c) => c.corporate_number)]);
+      if (
+        typeof body.choice === "string" &&
+        typeof body.confidence === "number" &&
+        valid.has(body.choice)
+      ) {
         return { choice: body.choice, confidence: Math.max(0, Math.min(1, body.confidence)) };
       }
       return this.fallback.decide(input);

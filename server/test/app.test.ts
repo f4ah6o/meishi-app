@@ -484,14 +484,47 @@ describe("POST /api/cards/confirm", () => {
     expect((deps.store as MemoryStore).contacts.size).toBe(1);
   });
 
-  it("rejects an unknown person_id", async () => {
-    const app = createApp(makeDeps());
+  it("rejects an unknown person_id without store side effects", async () => {
+    const deps = makeDeps();
+    const app = createApp(deps);
     const res = await app.request("/api/cards/confirm", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ...payload, person_id: "no-such-person" }),
     });
     expect(res.status).toBe(400);
+    const store = deps.store as MemoryStore;
+    expect(store.corporations.size).toBe(0);
+    expect(store.contacts.size).toBe(0);
+    expect(store.cards.size).toBe(0);
+  });
+
+  it("rejects a person_id tied to a different corporation without side effects", async () => {
+    const deps = makeDeps();
+    const app = createApp(deps);
+    const first = await (
+      await app.request("/api/cards/confirm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      })
+    ).json();
+    const res = await app.request("/api/cards/confirm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...payload,
+        company_name: "株式会社別会社",
+        corporate_number: "9999999999999",
+        person_name: "別会社担当",
+        person_id: (first as any).person_id,
+      }),
+    });
+    expect(res.status).toBe(409);
+    const store = deps.store as MemoryStore;
+    expect(store.corporations.size).toBe(1);
+    expect(store.contacts.size).toBe(1);
+    expect(store.cards.size).toBe(1);
   });
 });
 

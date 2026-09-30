@@ -189,6 +189,13 @@ export function createApp(deps: Deps): Hono {
       );
     }
 
+    // Resolve an explicitly chosen contact before any writes — a bad
+    // person_id must reject without leaving store side effects.
+    const chosenContact = data.person_id ? await store.getContact(data.person_id) : null;
+    if (data.person_id && !chosenContact) {
+      return c.json({ error: "bad_request", message: "person_id not found" }, 400);
+    }
+
     // A client-supplied corporate_number is evidence, not proof: it must be
     // well-formed and resolvable via an existing kintone corporation or the
     // public registry before the record may be marked verified.
@@ -227,23 +234,34 @@ export function createApp(deps: Deps): Hono {
       }
     }
 
-    // Duplicate prevention: corporation identity = corporate_number first.
-    const corp = await store.getOrCreateCorporation({
+    const corpData = {
       officialName: verifiedOfficialName ?? data.official_name ?? data.company_name,
       corporateNumber,
+      verificationStatus: corporationVerified ? "verified" : "unverified",
+    };
+    // An explicitly chosen person must actually belong to the corporation
+    // this confirm resolves to — never link a card across corporations.
+    if (chosenContact?.corporation_id) {
+      const resolved = await store.resolveCorporation(corpData);
+      if (resolved !== chosenContact.corporation_id) {
+        return c.json(
+          { error: "conflict", message: "person_id belongs to a different corporation" },
+          409,
+        );
+      }
+    }
+
+    // Duplicate prevention: corporation identity = corporate_number first.
+    const corp = await store.getOrCreateCorporation({
+      ...corpData,
       address: data.address,
       website: data.website,
-      verificationStatus: corporationVerified ? "verified" : "unverified",
     });
     // An explicitly chosen person_id is the user's decision; without one,
     // getOrCreateContact merges only on a real identifier match.
     let contact: { personId: string; deduplicated: boolean };
-    if (data.person_id) {
-      const chosen = await store.getContact(data.person_id);
-      if (!chosen) {
-        return c.json({ error: "bad_request", message: "person_id not found" }, 400);
-      }
-      contact = { personId: chosen.person_id, deduplicated: true };
+    if (chosenContact) {
+      contact = { personId: chosenContact.person_id, deduplicated: true };
     } else {
       contact = await store.getOrCreateContact({
         corporationId: corp.corporationId,

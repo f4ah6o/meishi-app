@@ -124,6 +124,33 @@ export class MemoryStore implements DataStore {
       }));
   }
 
+  async resolveCorporation(data: {
+    officialName: string;
+    corporateNumber?: string;
+    verificationStatus: string;
+  }): Promise<string | null> {
+    if (data.corporateNumber) {
+      const byNumber = [...this.corporations.values()].find(
+        (c) => c.corporate_number === data.corporateNumber,
+      );
+      if (byNumber) return byNumber.corporation_id;
+    }
+    const sameName = [...this.corporations.values()].filter(
+      (c) => companyNameKey(c.official_name) === companyNameKey(data.officialName),
+    );
+    if (!data.corporateNumber) {
+      return sameName.find((c) => !c.corporate_number)?.corporation_id ?? null;
+    }
+    const conflict = sameName.some(
+      (c) => c.corporate_number && c.corporate_number !== data.corporateNumber,
+    );
+    const unnumbered = sameName.find((c) => !c.corporate_number);
+    if (!conflict && unnumbered && data.verificationStatus === "verified") {
+      return unnumbered.corporation_id;
+    }
+    return null;
+  }
+
   async getOrCreateCorporation(data: {
     officialName: string;
     corporateNumber?: string;
