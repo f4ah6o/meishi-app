@@ -393,36 +393,58 @@ export class D1Store implements DataStore {
     // Atomic claim on the canonical identity (same corporation + normalized
     // name + each supplied identifier): batched with the INSERT, so a
     // concurrent confirm that committed its claims first makes our batch
-    // fail instead of inserting a duplicate.
+    // fail instead of inserting a duplicate. Claims and the contact row
+    // commit atomically, so an existing claim always implies a committed
+    // contact row.
     const claims: string[] = [];
     if (data.email) claims.push(`e|${data.email.toLowerCase()}`);
     if (data.phone) claims.push(`p|${digits(data.phone)}`);
     if (data.mobile) claims.push(`m|${digits(data.mobile)}`);
+    claims.sort();
+    // Whole-identity claim: covers the "matching + conflicting identifier =
+    // distinct person" path, where per-identifier claims are legitimately
+    // held by a different contact but an identical concurrent confirm must
+    // still not duplicate.
+    const identityClaim =
+      claims.length > 0 ? `${data.corporationId}|${nameKey}|i|${claims.join("+")}` : null;
     const claimedAt = new Date().toISOString();
-    const stmts = [
-      ...claims.map((k) =>
-        this.db
-          .prepare("INSERT INTO contact_claims (claim_key, person_id, created_at) VALUES (?, ?, ?)")
-          .bind(`${data.corporationId}|${nameKey}|${k}`, personId, claimedAt),
-      ),
-      insertContact(),
+    const claimStmt = (key: string) =>
+      this.db
+        .prepare("INSERT INTO contact_claims (claim_key, person_id, created_at) VALUES (?, ?, ?)")
+        .bind(key, personId, claimedAt);
+    const claimKeys = [
+      ...claims.map((k) => `${data.corporationId}|${nameKey}|${k}`),
+      ...(identityClaim ? [identityClaim] : []),
     ];
+    const isConflict = (e: unknown) => /unique|constraint/i.test(String(e));
     try {
-      if (stmts.length > 1) await this.db.batch(stmts);
-      else await stmts[0]!.run();
+      if (claimKeys.length > 0) await this.db.batch([...claimKeys.map(claimStmt), insertContact()]);
+      else await insertContact().run();
     } catch (e) {
-      if (/unique|constraint/i.test(String(e))) {
-        // Lost the race — the winner's contact row is now committed.
-        const winner = await findMergeable();
-        if (winner) return { personId: winner.person_id, deduplicated: true };
-        // A claim exists but no mergeable row: either an interrupted write
-        // left an orphan claim, or the matching identifier belongs to a
-        // record our semantics treat as a different person (conflicting
-        // identifier). Create the row anyway rather than wedging on it.
+      if (!isConflict(e)) throw e;
+      // Lost the race — the winner's contact row is now committed.
+      const winner = await findMergeable();
+      if (winner) return { personId: winner.person_id, deduplicated: true };
+      // A per-identifier claim is held by a contact our merge semantics
+      // treat as a different person (conflicting identifier). Retry with
+      // only the whole-identity claim: an identical concurrent insert is
+      // still detected, while the distinct person is created.
+      if (!identityClaim) {
         await insertContact().run();
         return { personId, deduplicated: false };
       }
-      throw e;
+      try {
+        await this.db.batch([claimStmt(identityClaim), insertContact()]);
+      } catch (e2) {
+        if (!isConflict(e2)) throw e2;
+        // An identical confirm won the identity claim after our re-read;
+        // its row is committed and must be mergeable (same identifiers
+        // cannot conflict with themselves).
+        const winner2 = await findMergeable();
+        if (winner2) return { personId: winner2.person_id, deduplicated: true };
+        await insertContact().run();
+      }
+      return { personId, deduplicated: false };
     }
     return { personId, deduplicated: false };
   }

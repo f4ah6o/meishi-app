@@ -332,6 +332,32 @@ describe("D1Store contacts / cards / interactions", () => {
     expect(interactions[1]?.summary).toBe("初回挨拶");
   });
 
+  // Returns a D1 handle whose first `misses` SELECTs on contacts return no
+  // rows, simulating a request that read before a concurrent winner committed.
+  function staleContactsDb(misses: number): D1Database {
+    let remaining = misses;
+    return new Proxy(db, {
+      get(target, prop, recv) {
+        if (prop !== "prepare") return Reflect.get(target, prop, recv);
+        return (sql: string) => {
+          const stmt = target.prepare(sql);
+          if (remaining > 0 && sql.includes("FROM contacts")) {
+            remaining -= 1;
+            const wrapped = Object.create(stmt) as D1PreparedStatement;
+            wrapped.all = <T = Record<string, unknown>>() =>
+              Promise.resolve({
+                results: [] as T[],
+                success: true,
+                meta: {},
+              } as unknown as D1Result<T>);
+            return wrapped;
+          }
+          return stmt;
+        };
+      },
+    }) as D1Database;
+  }
+
   it("dedupes contacts when a concurrent confirm wins the claims race", async () => {
     const corp = await store.getOrCreateCorporation({
       officialName: "株式会社斎藤印刷",
@@ -345,28 +371,7 @@ describe("D1Store contacts / cards / interactions", () => {
     // Simulate a second request whose SELECT ran before the winner committed:
     // it sees no same-name rows, so it proceeds to the INSERT — where the
     // contact_claims primary key must stop the duplicate.
-    let missed = false;
-    const stale = new Proxy(db, {
-      get(target, prop, recv) {
-        if (prop !== "prepare") return Reflect.get(target, prop, recv);
-        return (sql: string) => {
-          const stmt = target.prepare(sql);
-          if (!missed && sql.includes("FROM contacts")) {
-            missed = true;
-            const wrapped = Object.create(stmt) as D1PreparedStatement;
-            wrapped.all = <T = Record<string, unknown>>() =>
-              Promise.resolve({
-                results: [] as T[],
-                success: true,
-                meta: {},
-              } as unknown as D1Result<T>);
-            return wrapped;
-          }
-          return stmt;
-        };
-      },
-    });
-    const loser = await new D1Store(stale as D1Database).getOrCreateContact({
+    const loser = await new D1Store(staleContactsDb(1)).getOrCreateContact({
       corporationId: corp.corporationId,
       name: "斎藤 花子",
       email: "hanako@saito.example",
@@ -378,6 +383,43 @@ describe("D1Store contacts / cards / interactions", () => {
       .bind(corp.corporationId)
       .first<{ n: number }>();
     expect(count?.n).toBe(1);
+  });
+
+  it("dedupes identical distinct-person confirms racing on the identity claim", async () => {
+    const corp = await store.getOrCreateCorporation({
+      officialName: "株式会社中村印刷",
+      verificationStatus: "unverified",
+    });
+    // Existing same-name contact that a new confirm matches on email but
+    // conflicts on phone — per merge semantics a distinct person.
+    await store.getOrCreateContact({
+      corporationId: corp.corporationId,
+      name: "中村 一郎",
+      email: "ichiro@nakamura.example",
+      phone: "03-1111-1111",
+    });
+    const submission = {
+      corporationId: corp.corporationId,
+      name: "中村 一郎",
+      email: "ichiro@nakamura.example",
+      phone: "03-2222-2222",
+    };
+    // Two concurrent identical confirms both read before either committed:
+    // both miss the mergeable check (phone conflicts with the existing row),
+    // both fail per-identifier claims (email already claimed), and the
+    // winner's identity-claim + contact batch commits first. The loser
+    // misses its first re-read too, reaching the identity-claim batch —
+    // which conflicts, and its second re-read sees the committed winner.
+    const first = await new D1Store(staleContactsDb(1)).getOrCreateContact(submission);
+    const second = await new D1Store(staleContactsDb(2)).getOrCreateContact(submission);
+    expect(first.deduplicated).toBe(false);
+    expect(second.deduplicated).toBe(true);
+    expect(second.personId).toBe(first.personId);
+    const count = await db
+      .prepare("SELECT COUNT(*) AS n FROM contacts WHERE corporation_id = ?")
+      .bind(corp.corporationId)
+      .first<{ n: number }>();
+    expect(count?.n).toBe(2);
   });
 
   it("searches contacts by person and company keys", async () => {
