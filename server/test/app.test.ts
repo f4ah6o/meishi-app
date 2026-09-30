@@ -74,6 +74,23 @@ describe("POST /api/cards/analyze", () => {
     expect(res.status).toBe(415);
   });
 
+  it("rejects a HEIC payload with 415 (client must re-encode to JPEG)", async () => {
+    const app = createApp(makeDeps());
+    // ISOBMFF box header: size + "ftyp" + "heic" brand — what an unconverted
+    // iPhone photo-library pick would send.
+    const heic = Buffer.concat([
+      Buffer.from([0x00, 0x00, 0x00, 0x1c]),
+      Buffer.from("ftypheic"),
+      Buffer.alloc(64),
+    ]);
+    const res = await app.request("/api/cards/analyze", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ image_base64: heic.toString("base64") }),
+    });
+    expect(res.status).toBe(415);
+  });
+
   it("rejects oversized payloads", async () => {
     const app = createApp(makeDeps({ config: makeConfig({ maxImageBytes: 10 }) }));
     const res = await app.request("/api/cards/analyze", {

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { assessFrame, DEFAULT_THRESHOLDS, type Quad, quadDisplacement } from "./cardDetect.ts";
+import { fileToJpegDataUrl } from "./fileImage.ts";
 import { type RgbaImage, rectifyCard } from "./perspective.ts";
 
 const ANALYSIS_W = 192;
@@ -18,6 +19,7 @@ export function CameraCapture({ onCapture, busy }: Props) {
   const analysisCanvasRef = useRef<HTMLCanvasElement>(null);
   const [phase, setPhase] = useState<"starting" | "scanning" | "error">("starting");
   const [reasons, setReasons] = useState<string[]>([]);
+  const [fileError, setFileError] = useState<string | null>(null);
   const [stability, setStability] = useState(0);
   const [quad, setQuad] = useState<Quad | null>(null);
   const stable = useRef<{ quad: Quad | null; since: number }>({ quad: null, since: 0 });
@@ -196,15 +198,19 @@ export function CameraCapture({ onCapture, busy }: Props) {
           hidden
           onChange={(e) => {
             const f = e.target.files?.[0];
+            e.target.value = "";
             if (!f) return;
-            const reader = new FileReader();
-            reader.onload = () => {
-              if (typeof reader.result === "string") onCapture(reader.result);
-            };
-            reader.readAsDataURL(f);
+            // iOS may pass HEIC through unchanged — always re-encode to JPEG.
+            setFileError(null);
+            fileToJpegDataUrl(f)
+              .then((dataUrl) => onCapture(dataUrl))
+              .catch(() =>
+                setFileError("この画像形式は読み込めません。JPEG/PNGで選び直してください。"),
+              );
           }}
         />
       </label>
+      {fileError && <div className="error">{fileError}</div>}
     </div>
   );
 }
