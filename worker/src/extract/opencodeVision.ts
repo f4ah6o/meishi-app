@@ -95,8 +95,9 @@ export class OpenCodeVisionExtractor implements ImageCardExtractor {
         }),
       });
       if (!res.ok) {
-        const detail = (await res.text().catch(() => "")).slice(0, 500);
-        throw new Error(`OpenCode API failed: ${res.status} ${detail}`.trim());
+        // Status only — the upstream error body is untrusted and could echo
+        // request data; it must not propagate into logs/API responses.
+        throw new Error(`OpenCode API failed: ${res.status}`);
       }
       const body = (await res.json()) as {
         choices?: {

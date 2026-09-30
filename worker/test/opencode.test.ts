@@ -98,7 +98,10 @@ describe("OpenCodeVisionExtractor", () => {
 
   it("propagates non-2xx responses as errors", async () => {
     const ex = extractorWith(async () => new Response("unauthorized", { status: 401 }));
-    await expect(ex.extract({ bytes: JPEG_BYTES, mediaType: "image/jpeg" })).rejects.toThrow(/401/);
+    // Status-only failure: the untrusted upstream body must not leak into the error.
+    await expect(ex.extract({ bytes: JPEG_BYTES, mediaType: "image/jpeg" })).rejects.toThrow(
+      /^OpenCode API failed: 401$/,
+    );
   });
 
   it("rejects malformed extraction payloads", async () => {
