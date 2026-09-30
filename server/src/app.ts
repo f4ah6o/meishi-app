@@ -122,7 +122,7 @@ export function createApp(deps: Deps): Hono {
     try {
       const raw = await extractor.extract(imagePath);
       const card = normalizeCard(raw);
-      const result: AnalyzeResponse = await identify(card, identifyDeps);
+      const result: AnalyzeResponse = await identify(card, raw, identifyDeps);
       console.log(
         JSON.stringify({
           type: "ai_extraction",
@@ -200,11 +200,14 @@ export function createApp(deps: Deps): Hono {
     let verifiedOfficialName: string | undefined;
     if (corporateNumber) {
       const existing = await store.findCorporationByNumber(corporateNumber);
-      const registryHit =
-        !existing && registry.findByNumber
-          ? await registry.findByNumber(corporateNumber).catch(() => null)
-          : null;
-      const authoritative = existing ?? registryHit;
+      // A stored record is authoritative only when it was itself verified —
+      // otherwise resubmitting the same arbitrary number twice would
+      // self-promote to verified. Unverified numbers are re-checked against
+      // the public registry, and a hit upgrades the stored record below.
+      let authoritative = existing?.verification_status === "verified" ? existing : null;
+      if (!authoritative && registry.findByNumber) {
+        authoritative = await registry.findByNumber(corporateNumber).catch(() => null);
+      }
       if (authoritative) {
         // The number must actually belong to the submitted company: a forged
         // or mistyped pairing of this number with a different name is refused
@@ -232,15 +235,26 @@ export function createApp(deps: Deps): Hono {
       website: data.website,
       verificationStatus: corporationVerified ? "verified" : "unverified",
     });
-    const contact = await store.getOrCreateContact({
-      corporationId: corp.corporationId,
-      name: data.person_name,
-      department: data.department,
-      title: data.title,
-      email: data.email,
-      phone: data.phone,
-      mobile: data.mobile,
-    });
+    // An explicitly chosen person_id is the user's decision; without one,
+    // getOrCreateContact merges only on a real identifier match.
+    let contact: { personId: string; deduplicated: boolean };
+    if (data.person_id) {
+      const chosen = await store.getContact(data.person_id);
+      if (!chosen) {
+        return c.json({ error: "bad_request", message: "person_id not found" }, 400);
+      }
+      contact = { personId: chosen.person_id, deduplicated: true };
+    } else {
+      contact = await store.getOrCreateContact({
+        corporationId: corp.corporationId,
+        name: data.person_name,
+        department: data.department,
+        title: data.title,
+        email: data.email,
+        phone: data.phone,
+        mobile: data.mobile,
+      });
+    }
     const card = await store.createBusinessCard({
       personId: contact.personId,
       corporationId: corp.corporationId,

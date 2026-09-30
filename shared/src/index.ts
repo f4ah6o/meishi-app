@@ -33,6 +33,8 @@ export interface CorporationCandidate {
   city?: string;
   address?: string;
   website?: string;
+  /** Present on kintone-sourced candidates; public-registry hits are authoritative by nature. */
+  verification_status?: string;
 }
 
 export interface ContactCandidate {
@@ -87,6 +89,8 @@ export interface ConfirmedCardData {
   official_name?: string;
   corporate_number?: string;
   corporation_id?: string;
+  /** Explicit user-chosen existing contact — the only id-based merge allowed. */
+  person_id?: string;
   person_name: string;
   department?: string;
   title?: string;

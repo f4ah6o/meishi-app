@@ -1,4 +1,9 @@
-import type { AnalyzeResponse, CorporationCandidate, NormalizedCard } from "@meishi/shared";
+import type {
+  AnalyzeResponse,
+  BusinessCardExtraction,
+  CorporationCandidate,
+  NormalizedCard,
+} from "@meishi/shared";
 import type { CorporateRegistry } from "../corporate/registry.ts";
 import type { DecisionProvider, RuleDecisionProvider } from "../decision/decision.ts";
 import type { DataStore } from "../kintone/store.ts";
@@ -17,7 +22,11 @@ export interface IdentifyDeps {
  * After normalization: search kintone first, then public corporate data only
  * when kintone gives no decisive match — exactly the spec's ordering.
  */
-export async function identify(card: NormalizedCard, deps: IdentifyDeps): Promise<AnalyzeResponse> {
+export async function identify(
+  card: NormalizedCard,
+  raw: BusinessCardExtraction,
+  deps: IdentifyDeps,
+): Promise<AnalyzeResponse> {
   const { store, registry, decider, ruleDecider } = deps;
 
   const existingContacts = rankContacts(
@@ -75,7 +84,7 @@ export async function identify(card: NormalizedCard, deps: IdentifyDeps): Promis
 
   return {
     extraction: card,
-    raw: card,
+    raw,
     existing_contacts: existingContacts.slice(0, 5),
     corporate_candidates: corporateCandidates.slice(0, 10),
     decision,

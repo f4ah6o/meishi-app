@@ -36,6 +36,7 @@ export class KintoneStore implements DataStore {
       official_name: field(r, "official_name"),
       address: field(r, "address"),
       website: field(r, "website"),
+      verification_status: field(r, "verification_status"),
     }));
   }
 
@@ -53,6 +54,7 @@ export class KintoneStore implements DataStore {
       official_name: field(r, "official_name"),
       address: field(r, "address"),
       website: field(r, "website"),
+      verification_status: field(r, "verification_status"),
     };
   }
 
@@ -141,7 +143,28 @@ export class KintoneStore implements DataStore {
         this.apps.corporations.token,
         `corporate_number = "${q(data.corporateNumber)}" limit 1`,
       );
-      if (existing[0]) return { corporationId: recordId(existing[0]), deduplicated: true };
+      const byNumber = existing[0];
+      if (byNumber) {
+        // A verified identity upgrades a previously unverified record.
+        if (
+          data.verificationStatus === "verified" &&
+          field(byNumber, "verification_status") !== "verified"
+        ) {
+          const patch: Record<string, { value: unknown }> = {
+            verification_status: V("verified"),
+            official_name: V(data.officialName),
+          };
+          if (data.address && !field(byNumber, "address")) patch.address = V(data.address);
+          if (data.website && !field(byNumber, "website")) patch.website = V(data.website);
+          await this.client.putRecord(
+            this.apps.corporations.appId,
+            this.apps.corporations.token,
+            recordId(byNumber),
+            patch,
+          );
+        }
+        return { corporationId: recordId(byNumber), deduplicated: true };
+      }
     }
     const byName = await this.client.getRecords(
       this.apps.corporations.appId,
@@ -211,8 +234,14 @@ export class KintoneStore implements DataStore {
       this.apps.contacts.token,
       `corporation_id = "${q(data.corporationId)}" limit 50`,
     );
-    // Name alone is a weak key: a same-name contact whose nonempty
-    // email/phone/mobile differs is a different person — never merge.
+    // Name alone is a weak key — auto-merge requires at least one stable
+    // identifier that actually matches, with no conflicting identifier.
+    const identifierMatch = (r: Record<string, { value: unknown }>) =>
+      (data.email &&
+        field(r, "email") &&
+        field(r, "email").toLowerCase() === data.email.toLowerCase()) ||
+      (data.phone && field(r, "phone") && digits(field(r, "phone")) === digits(data.phone)) ||
+      (data.mobile && field(r, "mobile") && digits(field(r, "mobile")) === digits(data.mobile));
     const identifierConflict = (r: Record<string, { value: unknown }>) =>
       (data.email &&
         field(r, "email") &&
@@ -220,7 +249,8 @@ export class KintoneStore implements DataStore {
       (data.phone && field(r, "phone") && digits(field(r, "phone")) !== digits(data.phone)) ||
       (data.mobile && field(r, "mobile") && digits(field(r, "mobile")) !== digits(data.mobile));
     const dup = existing.find(
-      (r) => norm(field(r, "name")) === norm(data.name) && !identifierConflict(r),
+      (r) =>
+        norm(field(r, "name")) === norm(data.name) && identifierMatch(r) && !identifierConflict(r),
     );
     if (dup) {
       // Backfill identifiers the stored record is missing.

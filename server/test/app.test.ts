@@ -59,6 +59,9 @@ describe("POST /api/cards/analyze", () => {
     expect(body.extraction.company_name).toBe("株式会社山田建設");
     expect(body.extraction.company_name_key).toBe("山田建設");
     expect(body.extraction.domain).toBe("yamada-kensetsu.co.jp");
+    // raw preserves the extractor's original output for auditing.
+    expect(body.raw.company_name_raw).toBe("（株）山田建設");
+    expect(body.raw.person_name).toBe("山田 太郎");
   });
 
   it("rejects non-image payloads with 415", async () => {
@@ -188,20 +191,65 @@ describe("POST /api/cards/confirm", () => {
     expect(corp?.verification_status).toBe("verified");
   });
 
-  it("marks verified when the number already exists in kintone", async () => {
-    const deps = makeDeps();
-    const app = createApp(deps);
-    await app.request("/api/cards/confirm", {
+  it("marks verified when the number already exists in kintone as verified", async () => {
+    const store = new MemoryStore();
+    await store.getOrCreateCorporation({
+      officialName: "株式会社山田建設",
+      corporateNumber: "1234567890123",
+      verificationStatus: "verified",
+    });
+    const res = await createApp(makeDeps({ store })).request("/api/cards/confirm", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
-    const res = await app.request("/api/cards/confirm", {
+    expect(((await res.json()) as any).corporation_verified).toBe(true);
+  });
+
+  it("does not self-promote an unverified stored number on resubmission", async () => {
+    const deps = makeDeps();
+    const app = createApp(deps);
+    for (let i = 0; i < 2; i++) {
+      const res = await app.request("/api/cards/confirm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      expect(((await res.json()) as any).corporation_verified).toBe(false);
+    }
+    const corp = [...(deps.store as MemoryStore).corporations.values()][0];
+    expect(corp?.verification_status).toBe("unverified");
+  });
+
+  it("re-verifies an unverified stored number against the registry and upgrades it", async () => {
+    const store = new MemoryStore();
+    // First submission cannot resolve the number: stored unverified.
+    const first = await createApp(makeDeps({ store })).request("/api/cards/confirm", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...payload, person_name: "別担当" }),
+      body: JSON.stringify(payload),
     });
-    expect(((await res.json()) as any).corporation_verified).toBe(true);
+    expect(((await first.json()) as any).corporation_verified).toBe(false);
+    // Later, with a working registry, the same number verifies and the
+    // existing record is upgraded rather than left unverified.
+    const res = await createApp(
+      makeDeps({
+        store,
+        registry: new FakeRegistry([
+          { source: "nta", corporate_number: "1234567890123", official_name: "株式会社山田建設" },
+        ]),
+      }),
+    ).request("/api/cards/confirm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const body = (await res.json()) as any;
+    expect(body.corporation_verified).toBe(true);
+    expect(body.deduplicated).toBe(true);
+    expect(store.corporations.size).toBe(1);
+    const corp = [...store.corporations.values()][0];
+    expect(corp?.verification_status).toBe("verified");
   });
 
   it("keeps an unverifiable corporate_number unverified", async () => {
@@ -375,7 +423,26 @@ describe("POST /api/cards/confirm", () => {
     expect((deps.store as MemoryStore).contacts.size).toBe(2);
   });
 
-  it("dedupes a same-name contact and backfills missing identifiers", async () => {
+  it("dedupes a same-name contact on a real identifier match and backfills", async () => {
+    const deps = makeDeps();
+    const app = createApp(deps);
+    await app.request("/api/cards/confirm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...payload, email: "taro@yamada.co.jp" }),
+    });
+    const res = await app.request("/api/cards/confirm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...payload, email: "taro@yamada.co.jp", phone: "03-9999-0000" }),
+    });
+    expect(res.status).toBe(200);
+    expect((deps.store as MemoryStore).contacts.size).toBe(1);
+    const contact = [...(deps.store as MemoryStore).contacts.values()][0];
+    expect(contact?.phone).toBe("03-9999-0000");
+  });
+
+  it("does not merge a same-name contact on name alone", async () => {
     const deps = makeDeps();
     const app = createApp(deps);
     await app.request("/api/cards/confirm", {
@@ -383,15 +450,48 @@ describe("POST /api/cards/confirm", () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
-    const res = await app.request("/api/cards/confirm", {
+    // A same-name card bringing a new email could be a different person —
+    // no identifier actually matches, so a new contact is created.
+    await app.request("/api/cards/confirm", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ...payload, email: "taro@yamada.co.jp" }),
     });
+    expect((deps.store as MemoryStore).contacts.size).toBe(2);
+  });
+
+  it("reuses an explicitly chosen person_id", async () => {
+    const deps = makeDeps();
+    const app = createApp(deps);
+    const first = await (
+      await app.request("/api/cards/confirm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      })
+    ).json();
+    const res = await app.request("/api/cards/confirm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...payload,
+        person_name: "山田 太郎（再確認）",
+        person_id: (first as any).person_id,
+      }),
+    });
     expect(res.status).toBe(200);
+    expect(((await res.json()) as any).person_id).toBe((first as any).person_id);
     expect((deps.store as MemoryStore).contacts.size).toBe(1);
-    const contact = [...(deps.store as MemoryStore).contacts.values()][0];
-    expect(contact?.email).toBe("taro@yamada.co.jp");
+  });
+
+  it("rejects an unknown person_id", async () => {
+    const app = createApp(makeDeps());
+    const res = await app.request("/api/cards/confirm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...payload, person_id: "no-such-person" }),
+    });
+    expect(res.status).toBe(400);
   });
 });
 

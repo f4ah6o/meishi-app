@@ -136,7 +136,16 @@ export class MemoryStore implements DataStore {
       const byNumber = [...this.corporations.values()].find(
         (c) => c.corporate_number === data.corporateNumber,
       );
-      if (byNumber) return { corporationId: byNumber.corporation_id, deduplicated: true };
+      if (byNumber) {
+        // A verified identity upgrades a previously unverified record.
+        if (data.verificationStatus === "verified" && byNumber.verification_status !== "verified") {
+          byNumber.verification_status = "verified";
+          byNumber.official_name = data.officialName;
+          if (data.address && !byNumber.address) byNumber.address = data.address;
+          if (data.website && !byNumber.website) byNumber.website = data.website;
+        }
+        return { corporationId: byNumber.corporation_id, deduplicated: true };
+      }
     }
     const sameName = [...this.corporations.values()].filter(
       (c) => companyNameKey(c.official_name) === companyNameKey(data.officialName),
@@ -188,8 +197,12 @@ export class MemoryStore implements DataStore {
   }): Promise<{ personId: string; deduplicated: boolean }> {
     const norm = (s: string) => s.replace(/[\s　]+/g, "");
     const digits = (s: string) => s.replace(/\D/g, "");
-    // Name alone is a weak key: a same-name contact whose nonempty
-    // email/phone/mobile differs is a different person — never merge.
+    // Name alone is a weak key — auto-merge requires at least one stable
+    // identifier that actually matches, with no conflicting identifier.
+    const identifierMatch = (ct: ContactRow) =>
+      (data.email && ct.email && ct.email.toLowerCase() === data.email.toLowerCase()) ||
+      (data.phone && ct.phone && digits(ct.phone) === digits(data.phone)) ||
+      (data.mobile && ct.mobile && digits(ct.mobile) === digits(data.mobile));
     const identifierConflict = (ct: ContactRow) =>
       (data.email && ct.email && ct.email.toLowerCase() !== data.email.toLowerCase()) ||
       (data.phone && ct.phone && digits(ct.phone) !== digits(data.phone)) ||
@@ -198,6 +211,7 @@ export class MemoryStore implements DataStore {
       (ct) =>
         ct.corporation_id === data.corporationId &&
         norm(ct.name) === norm(data.name) &&
+        identifierMatch(ct) &&
         !identifierConflict(ct),
     );
     if (existing) {
@@ -276,6 +290,7 @@ export class MemoryStore implements DataStore {
       official_name: c.official_name,
       address: c.address,
       website: c.website,
+      verification_status: c.verification_status,
     };
   }
 
