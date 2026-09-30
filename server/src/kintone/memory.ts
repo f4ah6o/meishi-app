@@ -138,18 +138,28 @@ export class MemoryStore implements DataStore {
       );
       if (byNumber) return { corporationId: byNumber.corporation_id, deduplicated: true };
     }
-    const byName = [...this.corporations.values()].find(
+    const sameName = [...this.corporations.values()].filter(
       (c) => companyNameKey(c.official_name) === companyNameKey(data.officialName),
     );
-    // A same-name corporation holding a different registered corporate_number
-    // is a distinct legal entity — never alias it; create a new record.
-    if (
-      byName &&
-      (!data.corporateNumber ||
-        !byName.corporate_number ||
-        byName.corporate_number === data.corporateNumber)
-    ) {
-      return { corporationId: byName.corporation_id, deduplicated: true };
+    if (!data.corporateNumber) {
+      const byName = sameName[0];
+      if (byName) return { corporationId: byName.corporation_id, deduplicated: true };
+    } else {
+      // A same-name corporation holding a different registered
+      // corporate_number is a distinct legal entity — never alias it.
+      const conflict = sameName.some(
+        (c) => c.corporate_number && c.corporate_number !== data.corporateNumber,
+      );
+      const unnumbered = sameName.find((c) => !c.corporate_number);
+      // Only a verified number lets us upgrade an unnumbered same-name record;
+      // an unverifiable number must not be silently attached to it.
+      if (!conflict && unnumbered && data.verificationStatus === "verified") {
+        unnumbered.corporate_number = data.corporateNumber;
+        unnumbered.verification_status = "verified";
+        if (data.address && !unnumbered.address) unnumbered.address = data.address;
+        if (data.website && !unnumbered.website) unnumbered.website = data.website;
+        return { corporationId: unnumbered.corporation_id, deduplicated: true };
+      }
     }
 
     const corporationId = this.nextId("corp");
@@ -174,10 +184,28 @@ export class MemoryStore implements DataStore {
     mobile?: string;
   }): Promise<{ personId: string; deduplicated: boolean }> {
     const norm = (s: string) => s.replace(/[\s　]+/g, "");
+    const digits = (s: string) => s.replace(/\D/g, "");
+    // Name alone is a weak key: a same-name contact whose nonempty
+    // email/phone/mobile differs is a different person — never merge.
+    const identifierConflict = (ct: ContactRow) =>
+      (data.email && ct.email && ct.email.toLowerCase() !== data.email.toLowerCase()) ||
+      (data.phone && ct.phone && digits(ct.phone) !== digits(data.phone)) ||
+      (data.mobile && ct.mobile && digits(ct.mobile) !== digits(data.mobile));
     const existing = [...this.contacts.values()].find(
-      (ct) => ct.corporation_id === data.corporationId && norm(ct.name) === norm(data.name),
+      (ct) =>
+        ct.corporation_id === data.corporationId &&
+        norm(ct.name) === norm(data.name) &&
+        !identifierConflict(ct),
     );
-    if (existing) return { personId: existing.person_id, deduplicated: true };
+    if (existing) {
+      // Backfill identifiers the stored record is missing.
+      if (data.email && !existing.email) existing.email = data.email;
+      if (data.phone && !existing.phone) existing.phone = data.phone;
+      if (data.mobile && !existing.mobile) existing.mobile = data.mobile;
+      if (data.department && !existing.department) existing.department = data.department;
+      if (data.title && !existing.title) existing.title = data.title;
+      return { personId: existing.person_id, deduplicated: true };
+    }
     const personId = this.nextId("person");
     this.contacts.set(personId, {
       person_id: personId,

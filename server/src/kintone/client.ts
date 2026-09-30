@@ -39,6 +39,20 @@ export class KintoneClient {
     if (!res.ok) throw new Error(`kintone POST failed: ${res.status} ${await res.text()}`);
     return (await res.json()) as { id: string };
   }
+
+  async putRecord(
+    appId: string,
+    token: string,
+    id: string,
+    record: Record<string, { value: unknown }>,
+  ): Promise<void> {
+    const res = await this.fetchImpl(new URL("/k/v1/record.json", this.baseUrl), {
+      method: "PUT",
+      headers: { "X-Cybozu-API-Token": token, "Content-Type": "application/json" },
+      body: JSON.stringify({ app: Number(appId), id: Number(id), record }),
+    });
+    if (!res.ok) throw new Error(`kintone PUT failed: ${res.status} ${await res.text()}`);
+  }
 }
 
 export type KintoneRecord = Record<string, { value: unknown }> & {

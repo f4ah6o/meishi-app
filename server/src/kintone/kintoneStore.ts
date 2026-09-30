@@ -146,15 +146,35 @@ export class KintoneStore implements DataStore {
     const byName = await this.client.getRecords(
       this.apps.corporations.appId,
       this.apps.corporations.token,
-      `official_name = "${q(data.officialName)}" limit 1`,
+      `official_name = "${q(data.officialName)}" limit 10`,
     );
-    const named = byName[0];
-    if (named) {
-      const existingNumber = field(named, "corporate_number");
+    if (!data.corporateNumber) {
+      const named = byName[0];
+      if (named) return { corporationId: recordId(named), deduplicated: true };
+    } else {
       // A same-name record holding a different corporate_number is a distinct
       // legal entity — never alias it; create a new record.
-      if (!data.corporateNumber || !existingNumber || existingNumber === data.corporateNumber) {
-        return { corporationId: recordId(named), deduplicated: true };
+      const conflict = byName.some((r) => {
+        const n = field(r, "corporate_number");
+        return n !== "" && n !== data.corporateNumber;
+      });
+      const unnumbered = byName.find((r) => field(r, "corporate_number") === "");
+      // Only a verified number upgrades an unnumbered same-name record via a
+      // real kintone update; an unverifiable number is never attached to it.
+      if (!conflict && unnumbered && data.verificationStatus === "verified") {
+        const patch: Record<string, { value: unknown }> = {
+          corporate_number: V(data.corporateNumber),
+          verification_status: V("verified"),
+        };
+        if (data.address && !field(unnumbered, "address")) patch.address = V(data.address);
+        if (data.website && !field(unnumbered, "website")) patch.website = V(data.website);
+        await this.client.putRecord(
+          this.apps.corporations.appId,
+          this.apps.corporations.token,
+          recordId(unnumbered),
+          patch,
+        );
+        return { corporationId: recordId(unnumbered), deduplicated: true };
       }
     }
 
@@ -182,13 +202,40 @@ export class KintoneStore implements DataStore {
     mobile?: string;
   }): Promise<{ personId: string; deduplicated: boolean }> {
     const norm = (s: string) => s.replace(/[\s　]+/g, "");
+    const digits = (s: string) => s.replace(/\D/g, "");
     const existing = await this.client.getRecords(
       this.apps.contacts.appId,
       this.apps.contacts.token,
       `corporation_id = "${q(data.corporationId)}" limit 50`,
     );
-    const dup = existing.find((r) => norm(field(r, "name")) === norm(data.name));
-    if (dup) return { personId: recordId(dup), deduplicated: true };
+    // Name alone is a weak key: a same-name contact whose nonempty
+    // email/phone/mobile differs is a different person — never merge.
+    const identifierConflict = (r: Record<string, { value: unknown }>) =>
+      (data.email &&
+        field(r, "email") &&
+        field(r, "email").toLowerCase() !== data.email.toLowerCase()) ||
+      (data.phone && field(r, "phone") && digits(field(r, "phone")) !== digits(data.phone)) ||
+      (data.mobile && field(r, "mobile") && digits(field(r, "mobile")) !== digits(data.mobile));
+    const dup = existing.find(
+      (r) => norm(field(r, "name")) === norm(data.name) && !identifierConflict(r),
+    );
+    if (dup) {
+      // Backfill identifiers the stored record is missing.
+      const patch: Record<string, { value: unknown }> = {};
+      for (const key of ["email", "phone", "mobile", "department", "title"] as const) {
+        const v = data[key];
+        if (v && !field(dup, key)) patch[key] = V(v);
+      }
+      if (Object.keys(patch).length > 0) {
+        await this.client.putRecord(
+          this.apps.contacts.appId,
+          this.apps.contacts.token,
+          recordId(dup),
+          patch,
+        );
+      }
+      return { personId: recordId(dup), deduplicated: true };
+    }
 
     const created = await this.client.postRecord(
       this.apps.contacts.appId,

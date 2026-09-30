@@ -248,6 +248,82 @@ describe("POST /api/cards/confirm", () => {
     const card = [...(deps.store as MemoryStore).cards.values()][0];
     expect(card?.image_reference).toBe("");
   });
+
+  it("attaches a verified corporate_number to an unnumbered same-name record", async () => {
+    const store = new MemoryStore();
+    await store.getOrCreateCorporation({
+      officialName: "株式会社山田建設",
+      verificationStatus: "unverified",
+    });
+    const deps = makeDeps({
+      store,
+      registry: new FakeRegistry([
+        { source: "nta", corporate_number: "1234567890123", official_name: "株式会社山田建設" },
+      ]),
+    });
+    const res = await createApp(deps).request("/api/cards/confirm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const body = (await res.json()) as any;
+    expect(body.deduplicated).toBe(true);
+    expect(body.corporation_verified).toBe(true);
+    expect(store.corporations.size).toBe(1);
+    const corp = [...store.corporations.values()][0];
+    expect(corp?.corporate_number).toBe("1234567890123");
+    expect(corp?.verification_status).toBe("verified");
+  });
+
+  it("creates a new record rather than attaching an unverifiable number", async () => {
+    const store = new MemoryStore();
+    await store.getOrCreateCorporation({
+      officialName: "株式会社山田建設",
+      verificationStatus: "unverified",
+    });
+    const deps = makeDeps({ store, registry: new NumberlessRegistry() });
+    const res = await createApp(deps).request("/api/cards/confirm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const body = (await res.json()) as any;
+    expect(body.deduplicated).toBe(false);
+    expect(body.corporation_verified).toBe(false);
+    expect(store.corporations.size).toBe(2);
+  });
+
+  it("does not merge same-name contacts with conflicting emails", async () => {
+    const deps = makeDeps();
+    const app = createApp(deps);
+    for (const email of ["a@yamada.co.jp", "b@yamada.co.jp"]) {
+      await app.request("/api/cards/confirm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...payload, email }),
+      });
+    }
+    expect((deps.store as MemoryStore).contacts.size).toBe(2);
+  });
+
+  it("dedupes a same-name contact and backfills missing identifiers", async () => {
+    const deps = makeDeps();
+    const app = createApp(deps);
+    await app.request("/api/cards/confirm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const res = await app.request("/api/cards/confirm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...payload, email: "taro@yamada.co.jp" }),
+    });
+    expect(res.status).toBe(200);
+    expect((deps.store as MemoryStore).contacts.size).toBe(1);
+    const contact = [...(deps.store as MemoryStore).contacts.values()][0];
+    expect(contact?.email).toBe("taro@yamada.co.jp");
+  });
 });
 
 describe("contact suggestion and context", () => {
