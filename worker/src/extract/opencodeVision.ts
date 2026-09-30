@@ -50,7 +50,11 @@ export class OpenCodeVisionExtractor implements ImageCardExtractor {
   private readonly fetchImpl: typeof fetch;
 
   constructor(private readonly opts: OpenCodeVisionOptions) {
-    this.fetchImpl = opts.fetchImpl ?? fetch;
+    // In a Worker, global `fetch` must be invoked on the service-worker
+    // global receiver — storing the bare function and calling it through
+    // `this.fetchImpl` throws "Illegal invocation". The wrapper keeps the
+    // global call by default while preserving the injected test seam.
+    this.fetchImpl = opts.fetchImpl ?? ((...args) => fetch(...args));
   }
 
   async extract(image: { bytes: Uint8Array; mediaType: string }): Promise<BusinessCardExtraction> {
