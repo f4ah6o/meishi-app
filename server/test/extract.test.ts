@@ -1,5 +1,10 @@
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { parseExtractionJson } from "../src/extract/cardExtractor.ts";
+import { CodexAppServerExtractor } from "../src/extract/codexAppServer.ts";
+
+const FAKE_CODEX = fileURLToPath(new URL("./fixtures/fake-codex.mjs", import.meta.url));
 
 describe("parseExtractionJson", () => {
   it("parses a bare JSON object", () => {
@@ -26,5 +31,31 @@ describe("parseExtractionJson", () => {
 
   it("rejects non-JSON output", () => {
     expect(() => parseExtractionJson("名刺を読み取れませんでした")).toThrow();
+  });
+});
+
+describe("CodexAppServerExtractor", () => {
+  const image = join(FAKE_CODEX, "..", "card.png");
+
+  it("rejects an interrupted turn even after an agentMessage", async () => {
+    process.env.FAKE_TURN_STATUS = "interrupted";
+    const extractor = new CodexAppServerExtractor({
+      bin: FAKE_CODEX,
+      model: null,
+      timeoutMs: 10_000,
+    });
+    await expect(extractor.extract(image)).rejects.toThrow(/interrupted/i);
+  });
+
+  it("extracts on a completed turn", async () => {
+    process.env.FAKE_TURN_STATUS = "completed";
+    const extractor = new CodexAppServerExtractor({
+      bin: FAKE_CODEX,
+      model: null,
+      timeoutMs: 10_000,
+    });
+    const out = await extractor.extract(image);
+    expect(out.person_name).toBe("山田太郎");
+    delete process.env.FAKE_TURN_STATUS;
   });
 });

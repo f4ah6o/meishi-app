@@ -30,6 +30,19 @@ export class NtaRegistry implements CorporateRegistry {
     const xml = await res.text();
     return parseNtaXml(xml);
   }
+
+  /** Number lookup: GET /4/id?id=<appId>&number=<13digits>&type=12 */
+  async findByNumber(corporateNumber: string): Promise<CorporationCandidate | null> {
+    if (!this.appId || !/^\d{13}$/.test(corporateNumber)) return null;
+    const url = new URL("https://api.houjin-bangou.nta.go.jp/4/id");
+    url.searchParams.set("id", this.appId);
+    url.searchParams.set("number", corporateNumber);
+    url.searchParams.set("type", "12");
+    const res = await this.fetchImpl(url);
+    if (!res.ok) throw new Error(`NTA API failed: ${res.status}`);
+    const xml = await res.text();
+    return parseNtaXml(xml)[0] ?? null;
+  }
 }
 
 /** Flat-field XML extraction — the NTA payload has no nested attributes we need. */

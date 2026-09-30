@@ -25,7 +25,28 @@ export class GbizinfoRegistry implements CorporateRegistry {
     if (res.status === 404) return [];
     if (!res.ok) throw new Error(`gBizINFO API failed: ${res.status}`);
     const body = (await res.json()) as { "hojin-infos"?: GbizinfoEntry[] };
-    return (body["hojin-infos"] ?? []).map((e) => ({
+    return (body["hojin-infos"] ?? []).map((e) => this.toCandidate(e));
+  }
+
+  /** Number lookup: GET /hojin/v1/hojin/{corporate_number} */
+  async findByNumber(corporateNumber: string): Promise<CorporationCandidate | null> {
+    if (!this.apiToken || !/^\d{13}$/.test(corporateNumber)) return null;
+    const url = new URL(`https://info.gbiz.go.jp/hojin/v1/hojin/${corporateNumber}`);
+    const res = await this.fetchImpl(url, {
+      headers: { "X-hojinInfo-api-token": this.apiToken, Accept: "application/json" },
+    });
+    if (res.status === 404) return null;
+    if (!res.ok) throw new Error(`gBizINFO API failed: ${res.status}`);
+    const body = (await res.json()) as {
+      "hojin-infos"?: GbizinfoEntry | GbizinfoEntry[];
+    };
+    const infos = body["hojin-infos"];
+    const entry = Array.isArray(infos) ? infos[0] : infos;
+    return entry ? this.toCandidate(entry) : null;
+  }
+
+  private toCandidate(e: GbizinfoEntry): CorporationCandidate {
+    return {
       source: "gbizinfo",
       corporate_number: e.corporate_number,
       official_name: e.name,
@@ -33,7 +54,7 @@ export class GbizinfoRegistry implements CorporateRegistry {
       city: e.city_name,
       address: e.location,
       website: e.company_url,
-    }));
+    };
   }
 }
 

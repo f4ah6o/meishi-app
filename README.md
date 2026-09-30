@@ -35,10 +35,19 @@ npm run dev            # server:8787 + web:5173
 
 デフォルトのローカル構成（外部サービス不要）:
 
-- `AUTH_MODE=dev` — 固定の開発者identityで認証をバイパス（本番では必ず `access` にすること）
+- `AUTH_MODE=dev` — 固定の開発者identityで認証をバイパス。**既定は `access`（フェイルクローズ）で、`dev` はローカルの `.env` で明示した場合のみ有効**
 - `STORE_BACKEND=memory` — kintone の代わりにインメモリストア
 - `CARD_EXTRACTOR=codex` — ホスト上の `codex` CLIを使用。ない場合は `stub` に変更
 - `CORPORATE_REGISTRY=nta` — `NTA_APP_ID` 未設定なら候補0件で動作
+
+本番は `web` をビルドしてGateway単体で配信する:
+
+```bash
+npm run build                 # web/dist を生成
+npm run start -w @meishi/server   # Gatewayが /api/* と PWA を同一オリジンで配信
+```
+
+Gatewayは `HOST=127.0.0.1` にバインドするため、Cloudflare Tunnel経由でしか到達できない。
 
 ### テスト / 検証
 
@@ -69,7 +78,10 @@ JSON-only応答を強制する。Codexプロセスはインターネットへ公
 | interactions | `corporation_id`, `person_id`, `interaction_type`, `interaction_at`, `summary`, `next_action` |
 
 各アプリでAPIトークンを発行し `.env` に設定する。同一法人の重複登録は
-`corporate_number` を主要キーとして抑止される。
+`corporate_number` を主要キーとして抑止される。**corporationsアプリの
+`corporate_number` フィールドは「重複する値を禁止する」をONにすること** —
+これにより同時登録の競合でも一意性が保証される。なお、同じ社名でも
+`corporate_number` が異なる既存レコードとは名寄せしない（別法人として新規作成）。
 
 ## 法人データ
 
@@ -80,7 +92,7 @@ JSON-only応答を強制する。Codexプロセスはインターネットへ公
 
 iPhone Safariから社内Gatewayへ届ける経路。Codex app-server自体は公開しない。
 
-1. Gatewayを社内マシンで起動（`npm run start -w @meishi/server`、または web の `npm run build` 成果物を別途配信）。
+1. `npm run build` で `web/dist` を生成し、Gatewayを社内マシンで起動（`npm run start -w @meishi/server`）。Gatewayは `web/dist` のPWAと `/api/*` を同一オリジン（`127.0.0.1:8787`）で配信する。
 2. `cloudflared` をインストールし、Tunnelを作成:
 
    ```bash
@@ -96,7 +108,7 @@ iPhone Safariから社内Gatewayへ届ける経路。Codex app-server自体は�
    credentials-file: /path/to/<tunnel-id>.json
    ingress:
      - hostname: meishi.example.com
-       service: http://localhost:8787   # APIのみトンネル経由でもよい
+       service: http://localhost:8787   # PWAとAPIを同一ホスト名で公開
      - service: http_status:404
    ```
 
@@ -105,15 +117,17 @@ iPhone Safariから社内Gatewayへ届ける経路。Codex app-server自体は�
    cloudflared tunnel run meishi
    ```
 
-   フロントエンドは別の静的ホスティング（Workers Pages等）に置いてもよい。その場合 `/api` をGatewayの公開ホストへ向ける。
+   フロントエンドを別の静的ホスティング（Workers Pages等）に置く場合は `WEB_DIST=off` で静的配信を無効化し、`/api` をGatewayの公開ホストへ向ける。
 
-3. Cloudflare Zero Trust → Access → Applications で `meishi.example.com` をSelf-hostedアプリとして保護し、許可するユーザーのメールドメイン/グループを設定。Application の **AUD tag** をコピーする。
-4. `.env` に `AUTH_MODE=access`, `ACCESS_TEAM_NAME=<your-team>`, `ACCESS_AUD=<AUD>` を設定。Gatewayは `Cf-Access-Jwt-Assertion` を Access の公開鍵で検証する。
+3. Cloudflare Zero Trust → Access → Applications で `meishi.example.com` をSelf-hostedアプリとして保護し、許可するユーザーのメールドメイン/グループを設定。Application の **AUD tag** をコピーする。同一ホスト名で配信されるため、PWAとAPIの両方がAccessで保護される。
+4. `.env` に `AUTH_MODE=access`, `ACCESS_TEAM_NAME=<your-team>`, `ACCESS_AUD=<AUD>` を設定。Gatewayは `Cf-Access-Jwt-Assertion` を Access の公開鍵で署名・issuer・audienceを検証する。
 
 ## セキュリティ
 
 - HTTPSはCloudflare側で終端。GatewayはTunnel経由のみで受ける（直接公開しない）。
-- `Cf-Access-Jwt-Assertion` JWTをAccessのJWKで検証（`AUTH_MODE=access`）。
+- `Cf-Access-Jwt-Assertion` JWTをAccessのJWKで検証（issuer `https://<team>.cloudflareaccess.com` + audience）。`AUTH_MODE` の既定は `access` でフェイルクローズ。
+- Gatewayは `HOST=127.0.0.1` にバインドし、Tunnel以外から直接到達できない。
+- 確認登録時、クライアント送信の `corporate_number` は13桁検証のうえkintone既存レコードまたは公開法人データ（NTA `/4/id` / gBizINFO `/hojin/v1/hojin/{n}`）で照合し、確認できた場合のみ `verified` とする。
 - AI/API/kintoneの認証情報はGatewayのenvのみに置き、ブラウザへ出さない。
 - リクエストサイズ制限・画像マジックバイト検証（JPEG/PNG/WebPのみ）・レート制限。
 - アクセスログ・AI処理ログ・登録履歴をJSON構造化でstdoutに出力。

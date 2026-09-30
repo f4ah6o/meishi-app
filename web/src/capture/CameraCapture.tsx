@@ -25,8 +25,14 @@ export function CameraCapture({ onCapture, busy }: Props) {
 
   useEffect(() => {
     let cancelled = false;
+    // mediaDevices is absent on insecure origins / very old browsers — fall
+    // back to the file picker instead of throwing or hanging on "starting".
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setPhase("error");
+      return;
+    }
     navigator.mediaDevices
-      ?.getUserMedia({
+      .getUserMedia({
         video: { facingMode: { ideal: "environment" }, width: { ideal: 1920 } },
         audio: false,
       })

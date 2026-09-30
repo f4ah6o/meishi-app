@@ -26,6 +26,7 @@ interface CardRow {
   business_card_id: string;
   person_id: string;
   corporation_id: string;
+  image_reference: string;
   captured_at: string;
 }
 
@@ -140,7 +141,16 @@ export class MemoryStore implements DataStore {
     const byName = [...this.corporations.values()].find(
       (c) => companyNameKey(c.official_name) === companyNameKey(data.officialName),
     );
-    if (byName) return { corporationId: byName.corporation_id, deduplicated: true };
+    // A same-name corporation holding a different registered corporate_number
+    // is a distinct legal entity — never alias it; create a new record.
+    if (
+      byName &&
+      (!data.corporateNumber ||
+        !byName.corporate_number ||
+        byName.corporate_number === data.corporateNumber)
+    ) {
+      return { corporationId: byName.corporation_id, deduplicated: true };
+    }
 
     const corporationId = this.nextId("corp");
     this.corporations.set(corporationId, {
@@ -196,6 +206,7 @@ export class MemoryStore implements DataStore {
       business_card_id: id,
       person_id: data.personId,
       corporation_id: data.corporationId,
+      image_reference: data.imageReference,
       captured_at: new Date().toISOString(),
     });
     return { businessCardId: id };

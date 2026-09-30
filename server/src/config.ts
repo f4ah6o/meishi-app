@@ -1,11 +1,15 @@
 export interface AppConfig {
   port: number;
+  /** Interface the gateway binds to. Defaults to loopback: Cloudflare Tunnel is the only ingress. */
+  host: string;
   /** Maximum accepted image size in bytes (decoded). */
   maxImageBytes: number;
   /** How long captured card images are kept on the gateway. */
   imageRetention: "ephemeral" | "keep";
+  /** Directory holding the built PWA (web/dist) served on this origin. null disables it. */
+  webDist: string | null;
 
-  /** Authentication mode: "access" verifies Cloudflare Access JWT; "dev" trusts a header. */
+  /** Authentication mode: "access" verifies Cloudflare Access JWT (default); "dev" trusts a header. */
   authMode: "access" | "dev";
   accessTeamName: string;
   accessAud: string;
@@ -39,18 +43,19 @@ export interface AppConfig {
   jevApiKey: string;
 }
 
-function env(name: string, fallback = ""): string {
-  return process.env[name] ?? fallback;
-}
+const DEFAULT_WEB_DIST = new URL("../../web/dist", import.meta.url).pathname;
 
 export function loadConfig(envMap: NodeJS.ProcessEnv = process.env): AppConfig {
   const e = (name: string, fallback = "") => envMap[name] ?? fallback;
   return {
     port: Number(e("PORT", "8787")),
+    host: e("HOST", "127.0.0.1"),
     maxImageBytes: Number(e("MAX_IMAGE_BYTES", String(6 * 1024 * 1024))),
     imageRetention: e("IMAGE_RETENTION", "ephemeral") === "keep" ? "keep" : "ephemeral",
+    webDist: e("WEB_DIST") === "off" ? null : e("WEB_DIST", DEFAULT_WEB_DIST),
 
-    authMode: e("AUTH_MODE", env("AUTH_MODE", "dev")) === "access" ? "access" : "dev",
+    // Fail closed: Access verification is the default; dev auth is opt-in only.
+    authMode: e("AUTH_MODE", "access") === "dev" ? "dev" : "access",
     accessTeamName: e("ACCESS_TEAM_NAME"),
     accessAud: e("ACCESS_AUD"),
     devUserEmail: e("DEV_USER_EMAIL", "dev@example.local"),

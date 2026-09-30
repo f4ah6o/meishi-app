@@ -114,6 +114,8 @@ export interface ConfirmResponse {
   interaction_id?: string;
   /** True when an existing corporation record was reused instead of creating one. */
   deduplicated: boolean;
+  /** True when the corporate_number was verified against kintone or a public registry. */
+  corporation_verified?: boolean;
 }
 
 export interface ApiError {

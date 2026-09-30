@@ -1,6 +1,7 @@
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { serveStatic } from "@hono/node-server/serve-static";
 import type {
   AnalyzeResponse,
   ConfirmedCardData,
@@ -188,13 +189,30 @@ export function createApp(deps: Deps): Hono {
       );
     }
 
+    // A client-supplied corporate_number is evidence, not proof: it must be
+    // well-formed and resolvable via an existing kintone corporation or the
+    // public registry before the record may be marked verified.
+    const corporateNumber = data.corporate_number?.trim() || undefined;
+    if (corporateNumber && !/^\d{13}$/.test(corporateNumber)) {
+      return c.json({ error: "bad_request", message: "corporate_number must be 13 digits" }, 400);
+    }
+    let corporationVerified = false;
+    if (corporateNumber) {
+      if (await store.findCorporationByNumber(corporateNumber)) {
+        corporationVerified = true;
+      } else if (registry.findByNumber) {
+        const found = await registry.findByNumber(corporateNumber).catch(() => null);
+        corporationVerified = found !== null;
+      }
+    }
+
     // Duplicate prevention: corporation identity = corporate_number first.
     const corp = await store.getOrCreateCorporation({
       officialName: data.official_name || data.company_name,
-      corporateNumber: data.corporate_number,
+      corporateNumber,
       address: data.address,
       website: data.website,
-      verificationStatus: data.corporate_number ? "verified" : "unverified",
+      verificationStatus: corporationVerified ? "verified" : "unverified",
     });
     const contact = await store.getOrCreateContact({
       corporationId: corp.corporationId,
@@ -208,10 +226,14 @@ export function createApp(deps: Deps): Hono {
     const card = await store.createBusinessCard({
       personId: contact.personId,
       corporationId: corp.corporationId,
-      imageReference: data.corporation_id ?? "",
+      // Ephemeral retention keeps no image to reference.
+      imageReference: "",
       rawExtraction: data.raw_extraction ?? "",
       confirmedData: JSON.stringify(data),
-      decisionConfidence: data.decision_confidence ?? 0,
+      decisionConfidence:
+        typeof data.decision_confidence === "number"
+          ? Math.min(1, Math.max(0, data.decision_confidence))
+          : 0,
       reviewStatus: "confirmed",
     });
     let interactionId: string | undefined;
@@ -242,9 +264,25 @@ export function createApp(deps: Deps): Hono {
       business_card_id: card.businessCardId,
       interaction_id: interactionId,
       deduplicated: corp.deduplicated,
+      corporation_verified: corporationVerified,
     };
     return c.json(res);
   });
+
+  // Serve the built PWA on this same origin so a single Cloudflare
+  // Access-protected Tunnel hostname reaches both the app and the API.
+  if (config.webDist) {
+    const webDist = config.webDist;
+    app.use("/*", serveStatic({ root: webDist }));
+    app.get("*", async (c) => {
+      if (c.req.path.startsWith("/api/")) return c.json({ error: "not_found" }, 404);
+      try {
+        return c.html(await readFile(join(webDist, "index.html"), "utf8"));
+      } catch {
+        return c.json({ error: "not_found" }, 404);
+      }
+    });
+  }
 
   return app;
 }

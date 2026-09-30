@@ -1,3 +1,6 @@
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { CorporationCandidate } from "@meishi/shared";
 import { describe, expect, it } from "vitest";
 import { createApp, type Deps } from "../src/app.ts";
@@ -18,6 +21,16 @@ class FakeRegistry implements CorporateRegistry {
   constructor(private candidates: CorporationCandidate[]) {}
   async search(): Promise<CorporationCandidate[]> {
     return this.candidates;
+  }
+  async findByNumber(corporateNumber: string): Promise<CorporationCandidate | null> {
+    return this.candidates.find((c) => c.corporate_number === corporateNumber) ?? null;
+  }
+}
+
+/** Registry that cannot verify numbers (no findByNumber). */
+class NumberlessRegistry implements CorporateRegistry {
+  async search(): Promise<CorporationCandidate[]> {
+    return [];
   }
 }
 
@@ -147,6 +160,94 @@ describe("POST /api/cards/confirm", () => {
     });
     expect(res.status).toBe(400);
   });
+
+  it("rejects a malformed corporate_number", async () => {
+    const app = createApp(makeDeps());
+    const res = await app.request("/api/cards/confirm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...payload, corporate_number: "123" }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("marks the corporation verified only when the number resolves", async () => {
+    const deps = makeDeps({
+      registry: new FakeRegistry([
+        { source: "nta", corporate_number: "1234567890123", official_name: "株式会社山田建設" },
+      ]),
+    });
+    const res = await createApp(deps).request("/api/cards/confirm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const body = (await res.json()) as any;
+    expect(body.corporation_verified).toBe(true);
+    const corp = [...(deps.store as MemoryStore).corporations.values()][0];
+    expect(corp?.verification_status).toBe("verified");
+  });
+
+  it("marks verified when the number already exists in kintone", async () => {
+    const deps = makeDeps();
+    const app = createApp(deps);
+    await app.request("/api/cards/confirm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const res = await app.request("/api/cards/confirm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...payload, person_name: "別担当" }),
+    });
+    expect(((await res.json()) as any).corporation_verified).toBe(true);
+  });
+
+  it("keeps an unverifiable corporate_number unverified", async () => {
+    const deps = makeDeps({ registry: new NumberlessRegistry() });
+    const res = await createApp(deps).request("/api/cards/confirm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const body = (await res.json()) as any;
+    expect(res.status).toBe(200);
+    expect(body.corporation_verified).toBe(false);
+    const corp = [...(deps.store as MemoryStore).corporations.values()][0];
+    expect(corp?.verification_status).toBe("unverified");
+  });
+
+  it("does not alias a same-name corporation with a different number", async () => {
+    const deps = makeDeps();
+    const app = createApp(deps);
+    await app.request("/api/cards/confirm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const res = await app.request("/api/cards/confirm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...payload, corporate_number: "9999999999999" }),
+    });
+    const body = (await res.json()) as any;
+    expect(body.deduplicated).toBe(false);
+    expect((deps.store as MemoryStore).corporations.size).toBe(2);
+  });
+
+  it("stores an empty image_reference with ephemeral retention", async () => {
+    const deps = makeDeps();
+    const app = createApp(deps);
+    const res = await app.request("/api/cards/confirm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...payload, corporation_id: "forged-id" }),
+    });
+    expect(res.status).toBe(200);
+    const card = [...(deps.store as MemoryStore).cards.values()][0];
+    expect(card?.image_reference).toBe("");
+  });
 });
 
 describe("contact suggestion and context", () => {
@@ -196,5 +297,70 @@ describe("contact suggestion and context", () => {
     const res = await app.request("/api/contacts/recent?company=山田建設");
     const body = (await res.json()) as any;
     expect(body.contacts[0].name).toBe("山田太郎");
+  });
+});
+
+describe("public registry search on non-decisive kintone matches", () => {
+  it("keeps searching public data when kintone has only a partial name match", async () => {
+    const store = new MemoryStore();
+    // Same-name-key prefix is a substring match, not a decisive entity match.
+    await store.getOrCreateCorporation({
+      officialName: "株式会社山田建設興業",
+      corporateNumber: "5555555555555",
+      verificationStatus: "verified",
+    });
+    const registry = new FakeRegistry([
+      { source: "nta", corporate_number: "1234567890123", official_name: "株式会社山田建設" },
+    ]);
+    const app = createApp(makeDeps({ store, registry }));
+    const res = await app.request("/api/cards/analyze", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ image_base64: PNG_1PX }),
+    });
+    const body = (await res.json()) as any;
+    const numbers = body.corporate_candidates.map((c: CorporationCandidate) => c.corporate_number);
+    expect(numbers).toContain("5555555555555");
+    expect(numbers).toContain("1234567890123");
+  });
+});
+
+describe("static web serving", () => {
+  function webDistDir(): string {
+    const dir = mkdtempSync(join(tmpdir(), "meishi-web-"));
+    writeFileSync(join(dir, "index.html"), "<!doctype html><title>meishi</title>");
+    writeFileSync(join(dir, "manifest.webmanifest"), "{}");
+    return dir;
+  }
+
+  it("serves index.html at / and on SPA fallback routes", async () => {
+    const app = createApp(makeDeps({ config: makeConfig({ webDist: webDistDir() }) }));
+    const root = await app.request("/");
+    expect(root.status).toBe(200);
+    expect(await root.text()).toContain("meishi");
+    const spa = await app.request("/confirm/some-path");
+    expect(spa.status).toBe(200);
+    expect(await spa.text()).toContain("meishi");
+  });
+
+  it("serves static assets", async () => {
+    const app = createApp(makeDeps({ config: makeConfig({ webDist: webDistDir() }) }));
+    const res = await app.request("/manifest.webmanifest");
+    expect(res.status).toBe(200);
+  });
+
+  it("returns JSON 404 for unknown /api routes, not the SPA", async () => {
+    const app = createApp(makeDeps({ config: makeConfig({ webDist: webDistDir() }) }));
+    const res = await app.request("/api/nope");
+    expect(res.status).toBe(404);
+    expect(res.headers.get("content-type")).toContain("application/json");
+  });
+
+  it("404s cleanly when no web dist exists", async () => {
+    const app = createApp(
+      makeDeps({ config: makeConfig({ webDist: join(tmpdir(), "no-such-dist") }) }),
+    );
+    const res = await app.request("/");
+    expect(res.status).toBe(404);
   });
 });

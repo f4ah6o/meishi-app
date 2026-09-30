@@ -80,8 +80,12 @@ async function runExtractionTurn(
       }
     } else if (msg.method === "turn/completed") {
       const params = msg.params as { turn?: { status?: string; error?: { message?: string } } };
-      if (params?.turn?.status === "failed") {
-        turnFailed = params.turn.error?.message ?? "turn failed";
+      // Only status "completed" is a success — "failed" and "interrupted" must
+      // not be treated as a usable extraction.
+      const status = params?.turn?.status;
+      if (status !== "completed") {
+        turnFailed =
+          params?.turn?.error?.message ?? `turn ended with status "${status ?? "unknown"}"`;
       }
       turnCompleted?.resolve();
     }

@@ -34,6 +34,7 @@ export function accessIdentity(config: AppConfig) {
     }
     try {
       const { payload } = await jwtVerify(token, jwks, {
+        issuer: `https://${config.accessTeamName}.cloudflareaccess.com`,
         audience: config.accessAud,
       });
       const email = (payload as { email?: string }).email;

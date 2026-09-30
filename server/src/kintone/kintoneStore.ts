@@ -148,7 +148,15 @@ export class KintoneStore implements DataStore {
       this.apps.corporations.token,
       `official_name = "${q(data.officialName)}" limit 1`,
     );
-    if (byName[0]) return { corporationId: recordId(byName[0]), deduplicated: true };
+    const named = byName[0];
+    if (named) {
+      const existingNumber = field(named, "corporate_number");
+      // A same-name record holding a different corporate_number is a distinct
+      // legal entity — never alias it; create a new record.
+      if (!data.corporateNumber || !existingNumber || existingNumber === data.corporateNumber) {
+        return { corporationId: recordId(named), deduplicated: true };
+      }
+    }
 
     const created = await this.client.postRecord(
       this.apps.corporations.appId,

@@ -2,6 +2,7 @@ import type { AnalyzeResponse, CorporationCandidate, NormalizedCard } from "@mei
 import type { CorporateRegistry } from "../corporate/registry.ts";
 import type { DecisionProvider, RuleDecisionProvider } from "../decision/decision.ts";
 import type { DataStore } from "../kintone/store.ts";
+import { companyNameKey } from "../normalize/normalize.ts";
 import { rankContacts } from "./ranking.ts";
 
 export interface IdentifyDeps {
@@ -35,14 +36,27 @@ export async function identify(card: NormalizedCard, deps: IdentifyDeps): Promis
     ? await store.searchCorporationsByName(card.company_name_key)
     : [];
 
-  // Search public corporate data only when kintone cannot identify the
-  // corporation (no candidate carrying a corporate number).
+  // A kintone hit is decisive only when exactly one corporation carries a
+  // corporate number and its normalized name equals the card's. Anything
+  // weaker (partial substring matches, several candidates, no number) still
+  // triggers a public registry search so both sets reach the human.
+  const numberedKintone = kintoneCorps.filter((c) => c.corporate_number);
+  const decisiveKintone =
+    numberedKintone.length === 1 &&
+    companyNameKey(numberedKintone[0]?.official_name ?? "") === card.company_name_key;
+
   let publicCandidates: CorporationCandidate[] = [];
-  if (card.company_name_key && !kintoneCorps.some((c) => c.corporate_number)) {
-    publicCandidates = await registry.search({
-      name: card.company_name_key,
-      domain: card.domain,
-    });
+  if (card.company_name_key && !decisiveKintone) {
+    publicCandidates = (
+      await registry.search({
+        name: card.company_name_key,
+        domain: card.domain,
+      })
+    ).filter(
+      (c) =>
+        !c.corporate_number ||
+        !numberedKintone.some((k) => k.corporate_number === c.corporate_number),
+    );
   }
 
   const corporateCandidates = [...kintoneCorps, ...publicCandidates];
