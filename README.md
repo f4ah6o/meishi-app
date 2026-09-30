@@ -163,8 +163,10 @@ npm run build -w @meishi/web
 cd worker
 npx wrangler d1 migrations apply DB --remote
 npx wrangler secret put OPENCODE_API_KEY
-npx wrangler deploy --var ACCESS_TEAM_NAME:<team> --var ACCESS_AUD:<aud>
+npx wrangler deploy
 ```
+
+`ACCESS_TEAM_NAME` / `ACCESS_AUD` は wrangler.toml の `[vars]` に設定済み（このインストール向けの公開設定値。`--var` なしでデプロイすればJWT検証フォールバックが維持される）。別環境へデプロイする場合は `--var` で上書きする。
 
 オプション: `NTA_APP_ID`（`--var`）、`GBIZINFO_API_TOKEN` / `JEV_API_KEY`（`secret put`）、`CORPORATE_REGISTRY` / `DECISION_PROVIDER` / `JEV_ENDPOINT`（`--var`）。
 

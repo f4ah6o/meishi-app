@@ -4,7 +4,7 @@
 #   npm run build -w @meishi/web                       # assets directory must exist
 #   npx wrangler d1 migrations apply DB --remote       # apply worker/migrations/*
 #   npx wrangler secret put OPENCODE_API_KEY           # Zen Go key (no fake fallback)
-#   npx wrangler deploy --var ACCESS_TEAM_NAME:team --var ACCESS_AUD:<aud>
+#   npx wrangler deploy                               # ACCESS_* vars below ship with the deploy
 #
 # Access: create a Cloudflare Access application with destination type
 # "worker" bound to this Worker so production + preview + every hostname is
@@ -29,9 +29,11 @@ OPENCODE_MODEL = "deepseek-v4-flash-vision-exp"
 OPENCODE_TIMEOUT_MS = "60000"
 CORPORATE_REGISTRY = "nta"
 DECISION_PROVIDER = "rule"
-# Required for JWT verification — set at deploy time (see header comment):
-ACCESS_TEAM_NAME = ""
-ACCESS_AUD = ""
+# JWT-verification fallback for Cf-Access-Jwt-Assertion (public config, not
+# secrets — the issuer/audience of the bound Access application). Deploying
+# without --var overrides preserves these values.
+ACCESS_TEAM_NAME = "f4ah6o"
+ACCESS_AUD = "5feb456c9f39492df3ebe8d0e8a524e2b4422bbbae174c8c9033848bba0315a5"
 # NTA_APP_ID / GBIZINFO_API_TOKEN / JEV_* — optional vars/secrets, see README.
 
 # Static PWA. Every request runs the Worker first so Access identity
