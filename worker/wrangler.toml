@@ -1,0 +1,49 @@
+# meishi-app — Cloudflare Worker (PWA + Hono API + D1)
+#
+# Deploy (run by the platform owner, never from CI):
+#   npm run build -w @meishi/web                       # assets directory must exist
+#   npx wrangler d1 migrations apply DB --remote       # apply worker/migrations/*
+#   npx wrangler secret put OPENCODE_API_KEY           # Zen Go key (no fake fallback)
+#   npx wrangler deploy --var ACCESS_TEAM_NAME:team --var ACCESS_AUD:<aud>
+#
+# Access: create a Cloudflare Access application with destination type
+# "worker" bound to this Worker so production + preview + every hostname is
+# covered. The Worker additionally fails closed without a valid identity
+# (ctx.access or a verified Cf-Access-Jwt-Assertion), so assets and /api/*
+# stay protected even if the Access policy is removed.
+
+name = "meishi-demo"
+main = "src/index.ts"
+compatibility_date = "2025-09-11"
+
+# Version preview URLs stay off: every URL that serves this Worker is the
+# Access-protected one.
+preview_urls = false
+
+[vars]
+ENVIRONMENT = "production"
+MAX_IMAGE_BYTES = "6291456"
+RATE_LIMIT_PER_MINUTE = "60"
+OPENCODE_BASE_URL = "https://opencode.ai/zen/go/v1"
+OPENCODE_MODEL = "deepseek-v4-flash-vision-exp"
+OPENCODE_TIMEOUT_MS = "60000"
+CORPORATE_REGISTRY = "nta"
+DECISION_PROVIDER = "rule"
+# Required for JWT verification — set at deploy time (see header comment):
+ACCESS_TEAM_NAME = ""
+ACCESS_AUD = ""
+# NTA_APP_ID / GBIZINFO_API_TOKEN / JEV_* — optional vars/secrets, see README.
+
+# Static PWA. Every request runs the Worker first so Access identity
+# enforcement covers assets as well as the API.
+[assets]
+directory = "../web/dist"
+binding = "ASSETS"
+run_worker_first = true
+not_found_handling = "single-page-application"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "meishi-demo"
+database_id = "c00c6011-be89-47fc-a9ab-356ef8a1a856"
+migrations_dir = "migrations"

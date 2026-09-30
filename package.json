@@ -6,7 +6,8 @@
   "workspaces": [
     "shared",
     "server",
-    "web"
+    "web",
+    "worker"
   ],
   "scripts": {
     "dev": "concurrently -n server,web -c blue,green \"npm run dev -w @meishi/server\" \"npm run dev -w @meishi/web\"",
@@ -15,7 +16,7 @@
     "build": "npm run build -w @meishi/web",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
-    "typecheck": "npm run typecheck -w @meishi/server && npm run typecheck -w @meishi/web",
+    "typecheck": "npm run typecheck -w @meishi/server && npm run typecheck -w @meishi/web && npm run typecheck -w @meishi/worker",
     "test": "vitest run"
   },
   "devDependencies": {
@@ -26,6 +27,9 @@
   },
   "allowScripts": {
     "esbuild@0.28.2": true,
-    "esbuild@0.25.12": true
+    "esbuild@0.25.12": true,
+    "esbuild@0.28.1": true,
+    "workerd@1.20260921.1": true,
+    "workerd@1.20260730.1": true
   }
 }

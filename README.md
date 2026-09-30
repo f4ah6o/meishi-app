@@ -122,6 +122,61 @@ iPhone Safariから社内Gatewayへ届ける経路。Codex app-server自体は�
 3. Cloudflare Zero Trust → Access → Applications で `meishi.example.com` をSelf-hostedアプリとして保護し、許可するユーザーのメールドメイン/グループを設定。Application の **AUD tag** をコピーする。同一ホスト名で配信されるため、PWAとAPIの両方がAccessで保護される。
 4. `.env` に `AUTH_MODE=access`, `ACCESS_TEAM_NAME=<your-team>`, `ACCESS_AUD=<AUD>` を設定。Gatewayは `Cf-Access-Jwt-Assertion` を Access の公開鍵で署名・issuer・audienceを検証する。
 
+## Cloudflare Workers デプロイ（`worker/`）
+
+PWAと同一APIをCloudflare Worker + Workers Static Assets + D1 (SQLite) で配信する構成。Node Gateway (`server/`) はそのまま残り、こちらは公開デモ向けの別経路。
+
+```text
+iPhone Safari / PWA (web/dist → Workers Assets)
+        | HTTPS
+Cloudflare Access (worker destination)
+        |
+Cloudflare Worker (worker/)
+        +--> OpenCode Zen Go vision API   名刺画像 -> 構造化JSON
+        +--> 国税庁法人番号API / gBizINFO (fetch)
+        +--> Decision AI (rule / Jev adapter)
+        +--> Cloudflare D1                corporations / contacts / business_cards / interactions
+```
+
+### 構成
+
+- `worker/wrangler.toml` — `meishi-demo` Worker。`[assets]` で `web/dist` を配信（`run_worker_first = true` で全リクエストがWorkerの認証を通る）、`[[d1_databases]]` は binding `DB` → `meishi-demo`、`preview_urls = false` でプレビューURLは公開しない。
+- `worker/migrations/0001_init.sql` — 4テーブル。`corporate_number` 非空に部分一意索引（同時登録の重複抑止）、`name_key` 列で名寄せ検索を永続化。
+- `worker/src/store/d1Store.ts` — kintone版と同一のデデュープ規則をD1に実装。全クエリバインドパラメータ。
+- `worker/src/extract/opencodeVision.ts` — OpenAI互換 `POST {OPENCODE_BASE_URL}/chat/completions`（既定 `https://opencode.ai/zen/go/v1`）に `data:` URL画像を投げるvision抽出。`OPENCODE_API_KEY` 未設定時は `/api/cards/analyze` が `503 extractor_not_configured` を返す（成功を偽装しない）。Zen Goは本来コーディングエージェント用途が主のため、モデル/キーがアプリ用途に対応するかは契約次第（実測: `max_tokens` が小さいとreasoningで枯渇し `finish_reason=length` + 空contentになるため2000に設定、length/空contentはエラー扱い）。
+
+### 認証（フェイルクローズ）
+
+全ルート（PWA静的アセットを含む）で以下の順にidentityを解決し、取れなければ401:
+
+1. `ctx.access.getIdentity()` — Accessがworker宛に認証した呼び出しのみ存在。
+2. `Cf-Access-Jwt-Assertion` をAccess JWKで署名・issuer・audience検証（多層防御）。
+
+`AUTH_MODE=dev` は `ENVIRONMENT=local`（`wrangler dev` + `.dev.vars`）のときだけ有効。デプロイ環境では絶対に設定しない。
+
+### デプロイ手順（オーナー作業）
+
+```bash
+npm run build -w @meishi/web
+# 1) まず403プレースホルダWorkerを作成し、Access (destination: worker) を
+#    meishi-demo に紐付けてから本実装をデプロイする（公開穴を作らない）
+cd worker
+npx wrangler d1 migrations apply DB --remote
+npx wrangler secret put OPENCODE_API_KEY
+npx wrangler deploy --var ACCESS_TEAM_NAME:<team> --var ACCESS_AUD:<aud>
+```
+
+オプション: `NTA_APP_ID`（`--var`）、`GBIZINFO_API_TOKEN` / `JEV_API_KEY`（`secret put`）、`CORPORATE_REGISTRY` / `DECISION_PROVIDER` / `JEV_ENDPOINT`（`--var`）。
+
+ローカル検証:
+
+```bash
+cd worker && cp .dev.vars.example .dev.vars   # ENVIRONMENT=local + AUTH_MODE=dev
+npm run build -w @meishi/web
+npx wrangler dev                              # D1はローカルSQLiteに自動作成
+npx wrangler d1 migrations apply DB --local
+```
+
 ## セキュリティ
 
 - HTTPSはCloudflare側で終端。GatewayはTunnel経由のみで受ける（直接公開しない）。

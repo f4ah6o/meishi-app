@@ -2,5 +2,8 @@ node_modules/
 dist/
 *.local
 .env
+.dev.vars
+.wrangler/
+.dist-check/
 .DS_Store
 coverage/
