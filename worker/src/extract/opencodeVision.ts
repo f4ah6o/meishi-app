@@ -123,7 +123,21 @@ export class OpenCodeVisionExtractor implements ImageCardExtractor {
       if (!text) {
         throw new Error("OpenCode API returned no message content");
       }
-      return parseExtractionJson(text);
+      const card = parseExtractionJson(text);
+      // parseExtractionJson fills missing fields with "" — a 200 + `{}` or
+      // field-less payload is not an extraction. Require at least one
+      // meaningful field before reporting success.
+      const meaningful = [
+        card.company_name_raw,
+        card.person_name,
+        card.email,
+        card.phone,
+        card.mobile,
+      ];
+      if (!meaningful.some((v) => v.trim().length > 0)) {
+        throw new Error("OpenCode extraction contained no usable fields");
+      }
+      return card;
     } finally {
       clearTimeout(timer);
     }

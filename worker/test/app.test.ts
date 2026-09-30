@@ -222,6 +222,19 @@ describe("API flows on D1", () => {
     expect(body.error).toBe("extractor_not_configured");
   });
 
+  it("enforces the rate limit across requests on the cached isolate app", async () => {
+    // index.ts caches the app per isolate — the limiter Map must persist
+    // between requests or the limit never applies.
+    const worker = (await import("../src/index.ts")).default;
+    const env = makeEnv({ RATE_LIMIT_PER_MINUTE: "2" });
+    const first = await worker.fetch(new Request("https://demo.example/api/health"), env, ctx);
+    const second = await worker.fetch(new Request("https://demo.example/api/health"), env, ctx);
+    const third = await worker.fetch(new Request("https://demo.example/api/health"), env, ctx);
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    expect(third.status).toBe(429);
+  });
+
   it("rejects non-image payloads", async () => {
     const env = makeEnv();
     const app = createWorkerApp(makeDeps({}, env));

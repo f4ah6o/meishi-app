@@ -247,24 +247,39 @@ export class D1Store implements DataStore {
     }
 
     const corporationId = newId("corp");
-    await this.db
-      .prepare(
-        `INSERT INTO corporations
-           (corporation_id, corporate_number, official_name, name_key,
-            address, website, verification_status, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .bind(
-        corporationId,
-        data.corporateNumber ?? "",
-        data.officialName,
-        companyNameKey(data.officialName),
-        data.address ?? "",
-        data.website ?? "",
-        data.verificationStatus,
-        new Date().toISOString(),
-      )
-      .run();
+    try {
+      await this.db
+        .prepare(
+          `INSERT INTO corporations
+             (corporation_id, corporate_number, official_name, name_key,
+              address, website, verification_status, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .bind(
+          corporationId,
+          data.corporateNumber ?? "",
+          data.officialName,
+          companyNameKey(data.officialName),
+          data.address ?? "",
+          data.website ?? "",
+          data.verificationStatus,
+          new Date().toISOString(),
+        )
+        .run();
+    } catch (e) {
+      // A concurrent confirmation may have inserted the same
+      // corporate_number between our read and this INSERT: the partial
+      // unique index stops the duplicate row, and we dedupe onto the
+      // winner instead of failing with a 500.
+      if (data.corporateNumber && /unique|constraint/i.test(String(e))) {
+        const winner = await this.db
+          .prepare("SELECT corporation_id FROM corporations WHERE corporate_number = ?")
+          .bind(data.corporateNumber)
+          .first<{ corporation_id: string }>();
+        if (winner) return { corporationId: winner.corporation_id, deduplicated: true };
+      }
+      throw e;
+    }
     return { corporationId, deduplicated: false };
   }
 

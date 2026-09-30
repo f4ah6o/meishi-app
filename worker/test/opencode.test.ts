@@ -99,4 +99,25 @@ describe("OpenCodeVisionExtractor", () => {
     const ex = extractorWith(async () => chatResponse("not json at all"));
     await expect(ex.extract({ bytes: JPEG_BYTES, mediaType: "image/jpeg" })).rejects.toThrow();
   });
+
+  it("rejects 200 + {} (schema-valid but field-less) as fake success", async () => {
+    const ex = extractorWith(async () => chatResponse("{}"));
+    await expect(ex.extract({ bytes: JPEG_BYTES, mediaType: "image/jpeg" })).rejects.toThrow(
+      /no usable fields/i,
+    );
+  });
+
+  it("rejects a payload whose fields are all empty strings", async () => {
+    const empty = Object.fromEntries(
+      Object.keys(JSON_PAYLOAD)
+        .filter((k) => k !== "uncertain_fields")
+        .map((k) => [k, ""]),
+    );
+    const ex = extractorWith(async () =>
+      chatResponse(JSON.stringify({ ...empty, uncertain_fields: [] })),
+    );
+    await expect(ex.extract({ bytes: JPEG_BYTES, mediaType: "image/jpeg" })).rejects.toThrow(
+      /no usable fields/i,
+    );
+  });
 });
