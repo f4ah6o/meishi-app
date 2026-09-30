@@ -149,7 +149,10 @@ export class KintoneStore implements DataStore {
       `official_name = "${q(data.officialName)}" limit 10`,
     );
     if (!data.corporateNumber) {
-      const named = byName[0];
+      // An explicit "no corporate number" choice must not be overridden by a
+      // same-name record that does carry a number — only unnumbered records
+      // are safe to dedupe against without number-selected evidence.
+      const named = byName.find((r) => field(r, "corporate_number") === "");
       if (named) return { corporationId: recordId(named), deduplicated: true };
     } else {
       // A same-name record holding a different corporate_number is a distinct

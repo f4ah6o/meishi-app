@@ -142,7 +142,10 @@ export class MemoryStore implements DataStore {
       (c) => companyNameKey(c.official_name) === companyNameKey(data.officialName),
     );
     if (!data.corporateNumber) {
-      const byName = sameName[0];
+      // An explicit "no corporate number" choice must not be overridden by a
+      // same-name record that does carry a number — only unnumbered records
+      // are safe to dedupe against without number-selected evidence.
+      const byName = sameName.find((c) => !c.corporate_number);
       if (byName) return { corporationId: byName.corporation_id, deduplicated: true };
     } else {
       // A same-name corporation holding a different registered

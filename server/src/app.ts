@@ -23,7 +23,7 @@ import { KintoneClient } from "./kintone/client.ts";
 import { KintoneStore } from "./kintone/kintoneStore.ts";
 import { MemoryStore } from "./kintone/memory.ts";
 import type { DataStore } from "./kintone/store.ts";
-import { normalizeCard } from "./normalize/normalize.ts";
+import { companyNameKey, normalizeCard } from "./normalize/normalize.ts";
 import { identify } from "./pipeline/identify.ts";
 import { rankContacts } from "./pipeline/ranking.ts";
 import { accessIdentity } from "./security/accessIdentity.ts";
@@ -197,18 +197,36 @@ export function createApp(deps: Deps): Hono {
       return c.json({ error: "bad_request", message: "corporate_number must be 13 digits" }, 400);
     }
     let corporationVerified = false;
+    let verifiedOfficialName: string | undefined;
     if (corporateNumber) {
-      if (await store.findCorporationByNumber(corporateNumber)) {
+      const existing = await store.findCorporationByNumber(corporateNumber);
+      const registryHit =
+        !existing && registry.findByNumber
+          ? await registry.findByNumber(corporateNumber).catch(() => null)
+          : null;
+      const authoritative = existing ?? registryHit;
+      if (authoritative) {
+        // The number must actually belong to the submitted company: a forged
+        // or mistyped pairing of this number with a different name is refused
+        // rather than persisted as verified.
+        const submittedKey = companyNameKey(data.official_name || data.company_name);
+        if (submittedKey !== companyNameKey(authoritative.official_name)) {
+          return c.json(
+            {
+              error: "conflict",
+              message: "corporate_number does not match the submitted company name",
+            },
+            409,
+          );
+        }
         corporationVerified = true;
-      } else if (registry.findByNumber) {
-        const found = await registry.findByNumber(corporateNumber).catch(() => null);
-        corporationVerified = found !== null;
+        verifiedOfficialName = authoritative.official_name;
       }
     }
 
     // Duplicate prevention: corporation identity = corporate_number first.
     const corp = await store.getOrCreateCorporation({
-      officialName: data.official_name || data.company_name,
+      officialName: verifiedOfficialName ?? data.official_name ?? data.company_name,
       corporateNumber,
       address: data.address,
       website: data.website,

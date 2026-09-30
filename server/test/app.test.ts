@@ -275,6 +275,75 @@ describe("POST /api/cards/confirm", () => {
     expect(corp?.verification_status).toBe("verified");
   });
 
+  it("does not reuse a numbered corporation for an explicit no-number choice", async () => {
+    const store = new MemoryStore();
+    await store.getOrCreateCorporation({
+      officialName: "株式会社山田建設",
+      corporateNumber: "1234567890123",
+      verificationStatus: "verified",
+    });
+    const deps = makeDeps({ store });
+    const { corporate_number: _omit, ...noNumber } = payload;
+    const res = await createApp(deps).request("/api/cards/confirm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(noNumber),
+    });
+    const body = (await res.json()) as any;
+    expect(body.deduplicated).toBe(false);
+    expect(store.corporations.size).toBe(2);
+    const created = [...store.corporations.values()].find((c) => !c.corporate_number);
+    expect(created?.verification_status).toBe("unverified");
+  });
+
+  it("rejects a corporate_number that disagrees with an existing record's name", async () => {
+    const store = new MemoryStore();
+    await store.getOrCreateCorporation({
+      officialName: "株式会社別会社",
+      corporateNumber: "1234567890123",
+      verificationStatus: "verified",
+    });
+    const res = await createApp(makeDeps({ store })).request("/api/cards/confirm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    expect(res.status).toBe(409);
+    expect(store.corporations.size).toBe(1);
+  });
+
+  it("rejects a corporate_number whose registry name disagrees", async () => {
+    const deps = makeDeps({
+      registry: new FakeRegistry([
+        { source: "nta", corporate_number: "1234567890123", official_name: "株式会社別会社" },
+      ]),
+    });
+    const res = await createApp(deps).request("/api/cards/confirm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    expect(res.status).toBe(409);
+    expect((deps.store as MemoryStore).corporations.size).toBe(0);
+  });
+
+  it("adopts the authoritative registry name for a verified number", async () => {
+    const deps = makeDeps({
+      registry: new FakeRegistry([
+        { source: "nta", corporate_number: "1234567890123", official_name: "株式会社山田建設" },
+      ]),
+    });
+    const res = await createApp(deps).request("/api/cards/confirm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...payload, company_name: "山田建設" }),
+    });
+    const body = (await res.json()) as any;
+    expect(body.corporation_verified).toBe(true);
+    const corp = [...(deps.store as MemoryStore).corporations.values()][0];
+    expect(corp?.official_name).toBe("株式会社山田建設");
+  });
+
   it("creates a new record rather than attaching an unverifiable number", async () => {
     const store = new MemoryStore();
     await store.getOrCreateCorporation({
