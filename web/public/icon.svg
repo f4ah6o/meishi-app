@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <title>名刺キャプチャ</title>
+  <rect width="512" height="512" rx="96" fill="#111827"/>
+  <rect x="86" y="150" width="340" height="212" rx="18" fill="none" stroke="#f9fafb" stroke-width="24"/>
+  <line x1="126" y1="212" x2="386" y2="212" stroke="#f9fafb" stroke-width="20" stroke-linecap="round"/>
+  <line x1="126" y1="270" x2="320" y2="270" stroke="#9ca3af" stroke-width="18" stroke-linecap="round"/>
+  <line x1="126" y1="314" x2="280" y2="314" stroke="#9ca3af" stroke-width="18" stroke-linecap="round"/>
+</svg>
