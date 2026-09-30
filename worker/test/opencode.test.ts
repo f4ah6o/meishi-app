@@ -39,10 +39,19 @@ function chatResponse(content: string, finishReason = "stop") {
 
 describe("OpenCodeVisionExtractor", () => {
   it("sends the documented chat/completions shape with the image as a content part", async () => {
-    const seen = {} as { url: string; auth: string; body: any };
+    const seen = {} as {
+      url: string;
+      auth: string;
+      session: string;
+      ua: string;
+      body: any;
+    };
     const ex = extractorWith(async (url, init) => {
+      const headers = init.headers as Record<string, string>;
       seen.url = url;
-      seen.auth = (init.headers as Record<string, string>).Authorization ?? "";
+      seen.auth = headers.Authorization ?? "";
+      seen.session = headers["x-opencode-session"] ?? "";
+      seen.ua = headers["User-Agent"] ?? "";
       seen.body = JSON.parse(init.body as string);
       return chatResponse(JSON.stringify(JSON_PAYLOAD));
     });
@@ -50,6 +59,9 @@ describe("OpenCodeVisionExtractor", () => {
     expect(card.person_name).toBe("山田 太郎");
     expect(seen.url).toBe("https://opencode.ai/zen/go/v1/chat/completions");
     expect(seen.auth).toBe("Bearer test-key");
+    // OpenCode Go requires a stable per-app session + identifying User-Agent.
+    expect(seen.session).toBe("meishi-app");
+    expect(seen.ua).toContain("meishi-app");
     expect(seen.body.model).toBe("deepseek-v4-flash-vision-exp");
     expect(seen.body.max_tokens).toBeGreaterThanOrEqual(1500);
     const parts = seen.body.messages[0].content;

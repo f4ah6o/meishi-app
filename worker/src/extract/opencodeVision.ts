@@ -15,8 +15,15 @@ export interface OpenCodeVisionOptions {
   apiKey: string;
   model: string;
   timeoutMs: number;
+  /**
+   * Stable per-app session identifier sent as `x-opencode-session`
+   * (OpenCode Go docs ask for a stable session, not per-request random).
+   */
+  session?: string;
   fetchImpl?: typeof fetch;
 }
+
+const USER_AGENT = "meishi-app/0.1 (+https://github.com/f4ah6o/meishi-app)";
 
 function bytesToBase64(bytes: Uint8Array): string {
   let bin = "";
@@ -60,6 +67,8 @@ export class OpenCodeVisionExtractor implements ImageCardExtractor {
         headers: {
           Authorization: `Bearer ${this.opts.apiKey}`,
           "Content-Type": "application/json",
+          "User-Agent": USER_AGENT,
+          "x-opencode-session": this.opts.session ?? "meishi-app",
         },
         body: JSON.stringify({
           model: this.opts.model,

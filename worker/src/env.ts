@@ -23,6 +23,8 @@ export interface WorkerEnv {
   OPENCODE_MODEL?: string;
   OPENCODE_API_KEY?: string;
   OPENCODE_TIMEOUT_MS?: string;
+  /** Stable session id sent as x-opencode-session (default "meishi-app"). */
+  OPENCODE_SESSION?: string;
 
   CORPORATE_REGISTRY?: string;
   NTA_APP_ID?: string;
@@ -45,6 +47,7 @@ export interface WorkerConfig {
   opencodeModel: string;
   opencodeApiKey: string;
   opencodeTimeoutMs: number;
+  opencodeSession: string;
   corporateRegistry: "nta" | "gbizinfo" | "none";
   ntaAppId: string;
   gbizinfoApiToken: string;
@@ -67,6 +70,7 @@ export function loadWorkerConfig(env: WorkerEnv): WorkerConfig {
     opencodeModel: e("OPENCODE_MODEL", "deepseek-v4-flash-vision-exp"),
     opencodeApiKey: e("OPENCODE_API_KEY"),
     opencodeTimeoutMs: Number(e("OPENCODE_TIMEOUT_MS", "60000")),
+    opencodeSession: e("OPENCODE_SESSION", "meishi-app"),
     corporateRegistry: (() => {
       const v = e("CORPORATE_REGISTRY", "nta");
       return v === "gbizinfo" || v === "none" ? v : "nta";

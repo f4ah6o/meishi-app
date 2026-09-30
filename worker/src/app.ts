@@ -45,6 +45,7 @@ export function buildDeps(env: WorkerEnv): WorkerDeps {
         apiKey: config.opencodeApiKey,
         model: config.opencodeModel,
         timeoutMs: config.opencodeTimeoutMs,
+        session: config.opencodeSession,
       })
     : null;
   const store = new D1Store(env.DB);
