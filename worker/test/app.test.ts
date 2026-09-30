@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { NullRegistry } from "@meishi/server/src/corporate/registry.ts";
 import { RuleDecisionProvider } from "@meishi/server/src/decision/decision.ts";
@@ -23,13 +23,18 @@ beforeAll(async () => {
     d1Databases: { DB: "test-meishi" },
   });
   db = await mf.getD1Database("DB");
-  const sql = readFileSync(join(__dirname, "../migrations/0001_init.sql"), "utf8")
-    .split("\n")
-    .filter((l) => !l.trim().startsWith("--"))
-    .join("\n");
-  for (const stmt of sql.split(";")) {
-    const trimmed = stmt.trim();
-    if (trimmed) await db.prepare(trimmed).run();
+  const dir = join(__dirname, "../migrations");
+  for (const file of readdirSync(dir)
+    .filter((f) => f.endsWith(".sql"))
+    .sort()) {
+    const sql = readFileSync(join(dir, file), "utf8")
+      .split("\n")
+      .filter((l) => !l.trim().startsWith("--"))
+      .join("\n");
+    for (const stmt of sql.split(";")) {
+      const trimmed = stmt.trim();
+      if (trimmed) await db.prepare(trimmed).run();
+    }
   }
 });
 

@@ -38,6 +38,8 @@ interface InteractionRow {
   interaction_at: string;
   summary: string;
   next_action: string;
+  /** Monotonic insertion order — breaks same-day `interaction_at` ties. */
+  created_seq: number;
 }
 
 /**
@@ -90,18 +92,29 @@ export class MemoryStore implements DataStore {
   }
 
   async listRecentContacts(limit: number): Promise<ContactCandidate[]> {
-    const lastSeen = new Map<string, string>();
+    const lastSeen = new Map<string, { at: string; seq: number }>();
     for (const i of this.interactions.values()) {
       const prev = lastSeen.get(i.person_id);
-      if (!prev || i.interaction_at > prev) lastSeen.set(i.person_id, i.interaction_at);
+      if (
+        !prev ||
+        i.interaction_at > prev.at ||
+        (i.interaction_at === prev.at && i.created_seq > prev.seq)
+      ) {
+        lastSeen.set(i.person_id, { at: i.interaction_at, seq: i.created_seq });
+      }
     }
     return [...this.contacts.values()]
       .map((ct) => ({
-        ...this.toContactCandidate(ct),
-        last_interaction_at: lastSeen.get(ct.person_id),
+        cand: this.toContactCandidate(ct),
+        last: lastSeen.get(ct.person_id),
       }))
-      .sort((a, b) => (b.last_interaction_at ?? "").localeCompare(a.last_interaction_at ?? ""))
-      .slice(0, limit);
+      .sort(
+        (a, b) =>
+          (b.last?.at ?? "").localeCompare(a.last?.at ?? "") ||
+          (b.last?.seq ?? 0) - (a.last?.seq ?? 0),
+      )
+      .slice(0, limit)
+      .map(({ cand, last }) => ({ ...cand, last_interaction_at: last?.at }));
   }
 
   async listInteractions(filter: {
@@ -114,7 +127,9 @@ export class MemoryStore implements DataStore {
           (!filter.personId || i.person_id === filter.personId) &&
           (!filter.corporationId || i.corporation_id === filter.corporationId),
       )
-      .sort((a, b) => b.interaction_at.localeCompare(a.interaction_at))
+      .sort(
+        (a, b) => b.interaction_at.localeCompare(a.interaction_at) || b.created_seq - a.created_seq,
+      )
       .map((i) => ({
         interaction_id: i.interaction_id,
         interaction_type: i.interaction_type,
@@ -301,6 +316,7 @@ export class MemoryStore implements DataStore {
       interaction_at: data.interactionAt,
       summary: data.summary,
       next_action: data.nextAction,
+      created_seq: this.seq,
     });
     return { interactionId: id };
   }

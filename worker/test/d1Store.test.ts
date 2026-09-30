@@ -1,21 +1,26 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { Miniflare } from "miniflare";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { D1Store } from "../src/store/d1Store.ts";
 
-const MIGRATION = join(__dirname, "../migrations/0001_init.sql");
+const MIGRATIONS_DIR = join(__dirname, "../migrations");
 
-/** Split the migration into single statements — D1 exec is picky about
+/** Split each migration into single statements — D1 exec is picky about
  *  comments/multi-line dumps; wrangler's migrator tolerates them. */
-export async function applyMigrations(db: D1Database, path = MIGRATION): Promise<void> {
-  const sql = readFileSync(path, "utf8")
-    .split("\n")
-    .filter((l) => !l.trim().startsWith("--"))
-    .join("\n");
-  for (const stmt of sql.split(";")) {
-    const trimmed = stmt.trim();
-    if (trimmed) await db.prepare(trimmed).run();
+export async function applyMigrations(db: D1Database, dir = MIGRATIONS_DIR): Promise<void> {
+  const files = readdirSync(dir)
+    .filter((f) => f.endsWith(".sql"))
+    .sort();
+  for (const file of files) {
+    const sql = readFileSync(join(dir, file), "utf8")
+      .split("\n")
+      .filter((l) => !l.trim().startsWith("--"))
+      .join("\n");
+    for (const stmt of sql.split(";")) {
+      const trimmed = stmt.trim();
+      if (trimmed) await db.prepare(trimmed).run();
+    }
   }
 }
 
@@ -292,6 +297,87 @@ describe("D1Store contacts / cards / interactions", () => {
     const hit = recent.find((c) => c.person_id === person.personId);
     expect(hit?.last_interaction_at).toBe("2026-09-30");
     expect(hit?.official_name).toBe("株式会社伊藤設計");
+  });
+
+  it("returns same-day interactions newest-first", async () => {
+    const corp = await store.getOrCreateCorporation({
+      officialName: "株式会社松本印刷",
+      verificationStatus: "unverified",
+    });
+    const person = await store.getOrCreateContact({
+      corporationId: corp.corporationId,
+      name: "松本 次郎",
+      email: "jiro@matsumoto.example",
+    });
+    // interaction_at is a date-only value (YYYY-MM-DD): two meetings on the
+    // same day must order by insertion recency, not insertion order-by-luck.
+    await store.createInteraction({
+      corporationId: corp.corporationId,
+      personId: person.personId,
+      interactionType: "meeting",
+      interactionAt: "2026-10-01",
+      summary: "初回挨拶",
+      nextAction: "",
+    });
+    await store.createInteraction({
+      corporationId: corp.corporationId,
+      personId: person.personId,
+      interactionType: "meeting",
+      interactionAt: "2026-10-01",
+      summary: "再訪",
+      nextAction: "",
+    });
+    const interactions = await store.listInteractions({ personId: person.personId });
+    expect(interactions[0]?.summary).toBe("再訪");
+    expect(interactions[1]?.summary).toBe("初回挨拶");
+  });
+
+  it("dedupes contacts when a concurrent confirm wins the claims race", async () => {
+    const corp = await store.getOrCreateCorporation({
+      officialName: "株式会社斎藤印刷",
+      verificationStatus: "unverified",
+    });
+    const first = await store.getOrCreateContact({
+      corporationId: corp.corporationId,
+      name: "斎藤 花子",
+      email: "hanako@saito.example",
+    });
+    // Simulate a second request whose SELECT ran before the winner committed:
+    // it sees no same-name rows, so it proceeds to the INSERT — where the
+    // contact_claims primary key must stop the duplicate.
+    let missed = false;
+    const stale = new Proxy(db, {
+      get(target, prop, recv) {
+        if (prop !== "prepare") return Reflect.get(target, prop, recv);
+        return (sql: string) => {
+          const stmt = target.prepare(sql);
+          if (!missed && sql.includes("FROM contacts")) {
+            missed = true;
+            const wrapped = Object.create(stmt) as D1PreparedStatement;
+            wrapped.all = <T = Record<string, unknown>>() =>
+              Promise.resolve({
+                results: [] as T[],
+                success: true,
+                meta: {},
+              } as unknown as D1Result<T>);
+            return wrapped;
+          }
+          return stmt;
+        };
+      },
+    });
+    const loser = await new D1Store(stale as D1Database).getOrCreateContact({
+      corporationId: corp.corporationId,
+      name: "斎藤 花子",
+      email: "hanako@saito.example",
+    });
+    expect(loser.deduplicated).toBe(true);
+    expect(loser.personId).toBe(first.personId);
+    const count = await db
+      .prepare("SELECT COUNT(*) AS n FROM contacts WHERE corporation_id = ?")
+      .bind(corp.corporationId)
+      .first<{ n: number }>();
+    expect(count?.n).toBe(1);
   });
 
   it("searches contacts by person and company keys", async () => {

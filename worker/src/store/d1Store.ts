@@ -104,7 +104,7 @@ export class D1Store implements DataStore {
                 (SELECT MAX(i.interaction_at) FROM interactions i
                   WHERE i.person_id = c.person_id) AS last_interaction_at
          FROM contacts c JOIN corporations corp ON corp.corporation_id = c.corporation_id
-         ORDER BY last_interaction_at DESC
+         ORDER BY last_interaction_at DESC, c.created_at DESC
          LIMIT ?`,
       )
       .bind(limit)
@@ -137,7 +137,7 @@ export class D1Store implements DataStore {
         `SELECT interaction_id, interaction_type, interaction_at, summary, next_action
          FROM interactions
          ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
-         ORDER BY interaction_at DESC`,
+         ORDER BY interaction_at DESC, created_at DESC, rowid DESC`,
       )
       .bind(...params)
       .all<InteractionRecord>();
@@ -331,15 +331,19 @@ export class D1Store implements DataStore {
       (data.email && ct.email && ct.email.toLowerCase() !== data.email.toLowerCase()) ||
       (data.phone && ct.phone && digits(ct.phone) !== digits(data.phone)) ||
       (data.mobile && ct.mobile && digits(ct.mobile) !== digits(data.mobile));
-    const { results } = await this.db
-      .prepare(
-        `SELECT person_id, corporation_id, name, name_key, department, title,
-                email, phone, mobile
-         FROM contacts WHERE corporation_id = ? AND name_key = ?`,
-      )
-      .bind(data.corporationId, personNameKey(data.name))
-      .all<ContactRow>();
-    const existing = results.find((ct) => identifierMatch(ct) && !identifierConflict(ct));
+    const nameKey = personNameKey(data.name);
+    const findMergeable = async () => {
+      const { results } = await this.db
+        .prepare(
+          `SELECT person_id, corporation_id, name, name_key, department, title,
+                  email, phone, mobile
+           FROM contacts WHERE corporation_id = ? AND name_key = ?`,
+        )
+        .bind(data.corporationId, nameKey)
+        .all<ContactRow>();
+      return results.find((ct) => identifierMatch(ct) && !identifierConflict(ct));
+    };
+    const existing = await findMergeable();
     if (existing) {
       // Backfill identifiers the stored record is missing.
       const email = data.email && !existing.email ? data.email : existing.email;
@@ -366,26 +370,60 @@ export class D1Store implements DataStore {
       return { personId: existing.person_id, deduplicated: true };
     }
     const personId = newId("person");
-    await this.db
-      .prepare(
-        `INSERT INTO contacts
-           (person_id, corporation_id, name, name_key, department, title,
-            email, phone, mobile, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .bind(
-        personId,
-        data.corporationId,
-        data.name,
-        personNameKey(data.name),
-        data.department ?? "",
-        data.title ?? "",
-        data.email ?? "",
-        data.phone ?? "",
-        data.mobile ?? "",
-        new Date().toISOString(),
-      )
-      .run();
+    const insertContact = () =>
+      this.db
+        .prepare(
+          `INSERT INTO contacts
+             (person_id, corporation_id, name, name_key, department, title,
+              email, phone, mobile, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .bind(
+          personId,
+          data.corporationId,
+          data.name,
+          nameKey,
+          data.department ?? "",
+          data.title ?? "",
+          data.email ?? "",
+          data.phone ?? "",
+          data.mobile ?? "",
+          new Date().toISOString(),
+        );
+    // Atomic claim on the canonical identity (same corporation + normalized
+    // name + each supplied identifier): batched with the INSERT, so a
+    // concurrent confirm that committed its claims first makes our batch
+    // fail instead of inserting a duplicate.
+    const claims: string[] = [];
+    if (data.email) claims.push(`e|${data.email.toLowerCase()}`);
+    if (data.phone) claims.push(`p|${digits(data.phone)}`);
+    if (data.mobile) claims.push(`m|${digits(data.mobile)}`);
+    const claimedAt = new Date().toISOString();
+    const stmts = [
+      ...claims.map((k) =>
+        this.db
+          .prepare("INSERT INTO contact_claims (claim_key, person_id, created_at) VALUES (?, ?, ?)")
+          .bind(`${data.corporationId}|${nameKey}|${k}`, personId, claimedAt),
+      ),
+      insertContact(),
+    ];
+    try {
+      if (stmts.length > 1) await this.db.batch(stmts);
+      else await stmts[0]!.run();
+    } catch (e) {
+      if (/unique|constraint/i.test(String(e))) {
+        // Lost the race — the winner's contact row is now committed.
+        const winner = await findMergeable();
+        if (winner) return { personId: winner.person_id, deduplicated: true };
+        // A claim exists but no mergeable row: either an interrupted write
+        // left an orphan claim, or the matching identifier belongs to a
+        // record our semantics treat as a different person (conflicting
+        // identifier). Create the row anyway rather than wedging on it.
+        await insertContact().run();
+        return { personId, deduplicated: false };
+      }
+      throw e;
+    }
     return { personId, deduplicated: false };
   }
 
@@ -435,8 +473,8 @@ export class D1Store implements DataStore {
       .prepare(
         `INSERT INTO interactions
            (interaction_id, corporation_id, person_id, interaction_type,
-            interaction_at, summary, next_action)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            interaction_at, summary, next_action, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .bind(
         id,
@@ -446,6 +484,7 @@ export class D1Store implements DataStore {
         data.interactionAt,
         data.summary,
         data.nextAction,
+        new Date().toISOString(),
       )
       .run();
     return { interactionId: id };

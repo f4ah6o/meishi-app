@@ -659,3 +659,37 @@ describe("static web serving", () => {
     expect(res.status).toBe(404);
   });
 });
+
+describe("MemoryStore interaction ordering", () => {
+  it("returns same-day interactions newest-first", async () => {
+    const store = new MemoryStore();
+    const corp = await store.getOrCreateCorporation({
+      officialName: "株式会社松本印刷",
+      verificationStatus: "unverified",
+    });
+    const person = await store.getOrCreateContact({
+      corporationId: corp.corporationId,
+      name: "松本 次郎",
+      email: "jiro@matsumoto.example",
+    });
+    await store.createInteraction({
+      corporationId: corp.corporationId,
+      personId: person.personId,
+      interactionType: "meeting",
+      interactionAt: "2026-10-01",
+      summary: "初回挨拶",
+      nextAction: "",
+    });
+    await store.createInteraction({
+      corporationId: corp.corporationId,
+      personId: person.personId,
+      interactionType: "meeting",
+      interactionAt: "2026-10-01",
+      summary: "再訪",
+      nextAction: "",
+    });
+    const interactions = await store.listInteractions({ personId: person.personId });
+    expect(interactions[0]?.summary).toBe("再訪");
+    expect(interactions[1]?.summary).toBe("初回挨拶");
+  });
+});

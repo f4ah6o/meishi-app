@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { Miniflare } from "miniflare";
 import { MockAgent } from "undici";
@@ -77,13 +77,18 @@ beforeAll(async () => {
     },
   });
   const db = await mf.getD1Database("DB");
-  const sql = readFileSync(join(__dirname, "../migrations/0001_init.sql"), "utf8")
-    .split("\n")
-    .filter((l) => !l.trim().startsWith("--"))
-    .join("\n");
-  for (const stmt of sql.split(";")) {
-    const trimmed = stmt.trim();
-    if (trimmed) await db.prepare(trimmed).run();
+  const dir = join(__dirname, "../migrations");
+  for (const file of readdirSync(dir)
+    .filter((f) => f.endsWith(".sql"))
+    .sort()) {
+    const sql = readFileSync(join(dir, file), "utf8")
+      .split("\n")
+      .filter((l) => !l.trim().startsWith("--"))
+      .join("\n");
+    for (const stmt of sql.split(";")) {
+      const trimmed = stmt.trim();
+      if (trimmed) await db.prepare(trimmed).run();
+    }
   }
 });
 
