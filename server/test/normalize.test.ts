@@ -56,6 +56,9 @@ describe("normalizePhone", () => {
   });
   it("formats mobile", () => {
     expect(normalizePhone("09012345678")).toBe("090-1234-5678");
+    // 4-digit area codes can't be re-split safely — keep digits intact.
+    expect(normalizePhone("0564-27-6000")).toBe("0564276000");
+    expect(normalizePhone("0466-27-0000")).toBe("0466270000");
   });
   it("keeps international prefix", () => {
     expect(normalizePhone("+81-3-1234-5678")).toBe("+81312345678");

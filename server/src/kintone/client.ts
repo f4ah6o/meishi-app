@@ -72,3 +72,12 @@ export function field(record: KintoneRecord, name: string): string {
 export function q(s: string): string {
   return s.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 }
+
+/**
+ * kintone `$id` is a numeric system identifier — queries must compare it to a
+ * number literal (`$id = 1175`), never a quoted string. Returns the validated
+ * numeric id or null when the value cannot be a record id.
+ */
+export function numericRecordId(id: string): number | null {
+  return /^\d+$/.test(id.trim()) ? Number(id) : null;
+}

@@ -72,15 +72,17 @@ export function normalizePhone(raw: string): string {
   }
   const digits = s.replace(/-/g, "");
   if (!/^0\d{9,10}$/.test(digits)) return digits.length >= 10 ? digits : "";
-  if (/^0[57-9]0/.test(digits)) {
-    // mobile / IP phone: 3-4-4
+  if (/^0[57-9]0\d{8}$/.test(digits)) {
+    // mobile / IP phone (070/080/090/050): 3-4-4
     return `${digits.slice(0, 3)}-${digits.slice(3, 7)}-${digits.slice(7)}`;
   }
-  // landline: leading 0X… split 3-3-4 or 2-4-4
-  if (/^0\d{2}/.test(digits) && digits.length === 11) {
-    return `${digits.slice(0, 3)}-${digits.slice(3, 7)}-${digits.slice(7)}`;
+  if (/^0[36]\d{8}$/.test(digits)) {
+    // Tokyo (03) / Osaka (06): the only 2-digit area codes — 2-4-4
+    return `${digits.slice(0, 2)}-${digits.slice(2, 6)}-${digits.slice(6)}`;
   }
-  return `${digits.slice(0, 2)}-${digits.slice(2, 6)}-${digits.slice(6)}`;
+  // Japanese area codes vary 2–5 digits; when we cannot restore the correct
+  // split, keep the digits rather than hyphenating wrongly.
+  return digits;
 }
 
 export function normalizeEmail(raw: string): string {

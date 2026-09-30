@@ -1,6 +1,6 @@
 import type { ContactCandidate, CorporationCandidate, InteractionRecord } from "@meishi/shared";
 import type { AppConfig } from "../config.ts";
-import { field, type KintoneClient, q, recordId } from "./client.ts";
+import { field, type KintoneClient, numericRecordId, q, recordId } from "./client.ts";
 import type { DataStore } from "./store.ts";
 
 const V = (value: unknown) => ({ value });
@@ -369,10 +369,13 @@ export class KintoneStore implements DataStore {
   }
 
   async getContact(personId: string): Promise<ContactCandidate | null> {
+    // $id is a numeric system field — a non-numeric id can never match.
+    const id = numericRecordId(personId);
+    if (id === null) return null;
     const records = await this.client.getRecords(
       this.apps.contacts.appId,
       this.apps.contacts.token,
-      `$id = "${q(personId)}" limit 1`,
+      `$id = ${id} limit 1`,
     );
     const r = records[0];
     return r ? this.toContactCandidate(r) : null;
@@ -382,12 +385,13 @@ export class KintoneStore implements DataStore {
     r: Record<string, { value: unknown }>,
   ): Promise<ContactCandidate> {
     const corpId = field(r as never, "corporation_id");
+    const corpNumId = numericRecordId(corpId);
     let corp: CorporationCandidate | null = null;
-    if (corpId) {
+    if (corpNumId !== null) {
       const corps = await this.client.getRecords(
         this.apps.corporations.appId,
         this.apps.corporations.token,
-        `$id = "${q(corpId)}" limit 1`,
+        `$id = ${corpNumId} limit 1`,
       );
       const cr = corps[0];
       if (cr) {
