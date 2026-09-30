@@ -31,10 +31,10 @@ export class NtaRegistry implements CorporateRegistry {
     return parseNtaXml(xml);
   }
 
-  /** Number lookup: GET /4/id?id=<appId>&number=<13digits>&type=12 */
+  /** Number lookup: GET /4/num?id=<appId>&number=<13digits>&type=12 */
   async findByNumber(corporateNumber: string): Promise<CorporationCandidate | null> {
     if (!this.appId || !/^\d{13}$/.test(corporateNumber)) return null;
-    const url = new URL("https://api.houjin-bangou.nta.go.jp/4/id");
+    const url = new URL("https://api.houjin-bangou.nta.go.jp/4/num");
     url.searchParams.set("id", this.appId);
     url.searchParams.set("number", corporateNumber);
     url.searchParams.set("type", "12");

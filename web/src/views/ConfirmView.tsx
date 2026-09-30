@@ -1,6 +1,7 @@
 import type { AnalyzeResponse, ConfirmedCardData, ContactCandidate } from "@meishi/shared";
 import { useEffect, useMemo, useState } from "react";
 import { confirmCard, recentContacts } from "../api.ts";
+import { localDateString } from "../lib/localDate.ts";
 
 interface Props {
   analysis: AnalyzeResponse;
@@ -76,7 +77,7 @@ export function ConfirmView({ analysis, onRegistered, onSelectContact, onRetake 
         meeting: meeting.summary
           ? {
               interaction_type: meeting.type,
-              interaction_at: new Date().toISOString().slice(0, 10),
+              interaction_at: localDateString(),
               summary: meeting.summary,
               next_action: meeting.next_action,
             }
